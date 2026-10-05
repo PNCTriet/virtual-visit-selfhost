@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { VirtualVisitForm } from "./VirtualVisitForm";
-import { SpacePreview } from "./SpacePreview";
+import { MacPreview } from "./MacPreview";
 
 export function Landing({ initialRoom }: { initialRoom?: string }) {
   const [name, setName] = useState("");
@@ -20,7 +20,7 @@ export function Landing({ initialRoom }: { initialRoom?: string }) {
         </div>
       </div>
       <div className="vv-in" style={{ "--d": 3 } as React.CSSProperties}>
-        <SpacePreview name={name} />
+        <MacPreview />
       </div>
     </div>
   );

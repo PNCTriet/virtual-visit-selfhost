@@ -133,39 +133,12 @@ body {
   }
 }
 
-/* ---------- Room: MacBook frame on desktop, edge-to-edge game on phones ---------- */
+/* ---------- Landing: MacBook mock (as in the HowlsOS proposal). The room itself is full-viewport. ---------- */
 @layer components {
-  .vv-device {
-    position: relative;
-    width: calc(100vw - 24px);
-    height: calc(100dvh - 84px);
-    border-radius: 22px;
-    overflow: hidden;
-    background: #1d1d1f;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 12px 40px -12px rgb(0 0 0 / 0.25);
-  }
-  .vv-screen { position: absolute; inset: 0; }
-  .vv-bezel { display: none; }
-
-  @media (min-width: 768px) {
-    .vv-device {
-      /* Fit the laptop to the viewport: leave room for the header + hint, and for the side list on xl. */
-      --mac-w: min(1100px, calc(100vw - 48px), calc((100dvh - 150px) * 1903 / 1148));
-      width: var(--mac-w);
-      height: auto;
-      aspect-ratio: 1903 / 1148;
-      border-radius: 0;
-      overflow: visible;
-      background: none;
-      box-shadow: none;
-    }
-    /* Transparent screen rect of the bezel image, measured in HowlsOS (src/app/p/[id]/devices.tsx). */
-    .vv-screen { inset: auto; left: 10.247%; top: 2.352%; width: 79.506%; height: 85.627%; overflow: hidden; border-radius: 1.2% / 1.9%; background: #1d1d1f; }
-    .vv-bezel { display: block; position: relative; z-index: 1; width: 100%; height: auto; pointer-events: none; user-select: none; filter: drop-shadow(0 24px 40px rgb(0 0 0 / 0.12)); }
-  }
-  @media (min-width: 1280px) {
-    .vv-device { --mac-w: min(1100px, calc(100vw - 48px - 254px), calc((100dvh - 150px) * 1903 / 1148)); }
-  }
+  .vv-device { position: relative; width: 100%; aspect-ratio: 1903 / 1148; }
+  /* Transparent screen rect of the bezel image, measured in HowlsOS (src/app/p/[id]/devices.tsx). */
+  .vv-screen { position: absolute; left: 10.247%; top: 2.352%; width: 79.506%; height: 85.627%; overflow: hidden; border-radius: 1.2% / 1.9%; background: #1d1d1f; }
+  .vv-bezel { position: relative; z-index: 1; display: block; width: 100%; height: auto; pointer-events: none; user-select: none; filter: drop-shadow(0 24px 40px rgb(0 0 0 / 0.12)); }
 
   .vv-char { display: inline-block; background-image: url("/game/characters.png"); background-repeat: no-repeat; image-rendering: pixelated; border-radius: 6px; background-color: rgb(0 0 0 / 0.04); }
 

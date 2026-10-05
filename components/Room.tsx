@@ -107,9 +107,21 @@ export function Room({ roomId }: { roomId: string }) {
   );
 
   return (
-    <div className="flex min-h-dvh flex-col bg-[#f5f5f7]">
-      <header className="sticky top-0 z-20 px-3 pt-3">
-        <div className="vv-glass relative mx-auto flex h-12 max-w-[1240px] items-center gap-2 rounded-full pr-1.5 pl-4 sm:gap-3 sm:pl-5">
+    <div className="vv-room fixed inset-0 overflow-hidden bg-[#1d1d1f]">
+      {/* Game fills the whole viewport; UI floats on top. */}
+      <div
+        ref={screenRef}
+        className="absolute inset-0 touch-none"
+        role="application"
+        aria-label={`Room ${roomId}: ${everyone.length} ${everyone.length === 1 ? "person" : "people"} here. Move with WASD or the arrow keys.`}
+      />
+      {loading && (
+        <div className="absolute inset-0 grid place-items-center text-[13px] text-white/70">Entering room…</div>
+      )}
+      <Joystick onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
+
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-3">
+        <div className="vv-glass pointer-events-auto relative mx-auto flex h-12 max-w-[1240px] items-center gap-2 rounded-full pr-1.5 pl-4 sm:gap-3 sm:pl-5">
           <Link href="/" aria-label="HOWL STUDIO home" className="vv-focus shrink-0 rounded-full"><Logo compact /></Link>
           <span aria-hidden className="hidden h-4 w-px bg-black/10 sm:block" />
           <span className="truncate text-[13px] font-medium text-muted">#{roomId}</span>
@@ -147,36 +159,13 @@ export function Room({ roomId }: { roomId: string }) {
         </div>
       </header>
 
-      <main className="flex flex-1 items-center justify-center px-3 pt-3 pb-3 md:px-6 md:pt-4 md:pb-6">
-        <div className="flex items-start gap-6">
-          <div className="flex flex-col items-center">
-            <div className="vv-device">
-              <div className="vv-screen">
-                <div
-                  ref={screenRef}
-                  className="size-full touch-none"
-                  role="application"
-                  aria-label={`Room ${roomId}: ${everyone.length} ${everyone.length === 1 ? "person" : "people"} here. Move with WASD or the arrow keys.`}
-                />
-                {loading && (
-                  <div className="absolute inset-0 grid place-items-center text-[13px] text-white/70">Entering room…</div>
-                )}
-                <Joystick onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
-              </div>
-              {/* Official Apple MacBook Pro 14" bezel (Apple Design Resources); its screen area is transparent. */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/devices/macbook-pro-14-m5-silver.webp" width={1903} height={1148} alt="" aria-hidden draggable={false} className="vv-bezel" />
-            </div>
-            <p className="mt-5 hidden rounded-full px-4 text-center text-[13px] text-muted md:block">
-              <kbd className="font-sans font-semibold text-foreground">WASD</kbd> or <kbd className="font-sans font-semibold text-foreground">arrow keys</kbd> to walk around
-            </p>
-          </div>
+      <aside aria-label="Who's here" className="vv-glass absolute top-[72px] right-3 z-10 hidden w-[230px] rounded-[22px] p-4 xl:block">
+        {list}
+      </aside>
 
-          <aside aria-label="Who's here" className="vv-glass mt-6 hidden w-[230px] shrink-0 rounded-[22px] p-4 xl:block">
-            {list}
-          </aside>
-        </div>
-      </main>
+      <p className="vv-glass pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 rounded-full px-4 py-2 text-center text-[13px] text-muted md:block">
+        <kbd className="font-sans font-semibold text-foreground">WASD</kbd> or <kbd className="font-sans font-semibold text-foreground">arrow keys</kbd> to walk around
+      </p>
     </div>
   );
 }
