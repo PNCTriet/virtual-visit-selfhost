@@ -2,8 +2,8 @@
  * Realtime transport behind a tiny interface, so Supabase can be swapped for PartyKit,
  * Cloudflare Durable Objects, etc. without touching the game code.
  *
- * - "supabase": Supabase Realtime. Broadcast carries positions; Presence tracks join/leave.
- *   No tables, no auth: only NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
+ * - "supabase": Supabase Realtime. Broadcast carries positions and proximity chat; Presence
+ *   tracks join/leave. No tables, no auth: only NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
  * - "local": BroadcastChannel fallback when the env vars are missing (tabs of the same browser).
  */
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
@@ -13,6 +13,20 @@ export type PeerMeta = { id: string; name: string; color: string };
 export type Facing = 0 | 1 | 2 | 3;
 /** One broadcast "pos" message: world px position, facing, whether the avatar is walking, sender time. */
 export type PeerPos = PeerMeta & { x: number; y: number; f: Facing; m: boolean; t: number };
+/**
+ * One broadcast "chat" message. `to` is who the sender considered in range.
+ * Receivers still drop it unless that avatar is actually nearby (positions are client-authoritative).
+ */
+export type ChatMsg = {
+  id: string;
+  from: string;
+  name: string;
+  text: string;
+  t: number;
+  x: number;
+  y: number;
+  to: string[];
+};
 export type TransportKind = "supabase" | "local";
 export type TransportStatus = "connecting" | "live" | "error";
 
@@ -22,12 +36,15 @@ export type TransportHandlers = {
   /** Someone new arrived: re-send our position right away so they see us even if we're idle. */
   onJoin: () => void;
   onStatus: (s: TransportStatus) => void;
+  onChat: (m: ChatMsg) => void;
 };
 
 export interface RoomTransport {
   readonly kind: TransportKind;
   connect(self: PeerMeta, h: TransportHandlers): void;
   send(p: PeerPos): void;
+  /** @returns false when the socket isn't open yet (message was not sent). */
+  sendChat(m: ChatMsg): boolean;
   disconnect(): void;
 }
 
@@ -70,6 +87,7 @@ class SupabaseTransport implements RoomTransport {
       });
       this.channel = ch;
       ch.on("broadcast", { event: "pos" }, ({ payload }) => h.onPos(payload as PeerPos))
+        .on("broadcast", { event: "chat" }, ({ payload }) => h.onChat(payload as ChatMsg))
         .on("broadcast", { event: "bye" }, ({ payload }) => h.onLeave((payload as { id: string }).id))
         .on("presence", { event: "join" }, ({ key }) => { if (key !== self.id) h.onJoin(); })
         .on("presence", { event: "leave" }, ({ key }) => { if (key !== self.id) h.onLeave(key); })
@@ -93,6 +111,12 @@ class SupabaseTransport implements RoomTransport {
     if (this.ready) void this.channel?.send({ type: "broadcast", event: "pos", payload: p });
   }
 
+  sendChat(m: ChatMsg) {
+    if (!this.ready) return false;
+    void this.channel?.send({ type: "broadcast", event: "chat", payload: m });
+    return true;
+  }
+
   disconnect() {
     this.closed = true;
     const ch = this.channel;
@@ -103,7 +127,7 @@ class SupabaseTransport implements RoomTransport {
   }
 }
 
-type LocalMsg = { type: "pos"; p: PeerPos } | { type: "hello"; id: string } | { type: "bye"; id: string };
+type LocalMsg = { type: "pos"; p: PeerPos } | { type: "chat"; m: ChatMsg } | { type: "hello"; id: string } | { type: "bye"; id: string };
 
 class LocalTransport implements RoomTransport {
   readonly kind = "local" as const;
@@ -119,6 +143,7 @@ class LocalTransport implements RoomTransport {
     bc.onmessage = (e: MessageEvent<LocalMsg>) => {
       const m = e.data;
       if (m.type === "pos" && m.p.id !== self.id) h.onPos(m.p);
+      else if (m.type === "chat" && m.m.from !== self.id) h.onChat(m.m);
       else if (m.type === "hello" && m.id !== self.id) h.onJoin();
       else if (m.type === "bye" && m.id !== self.id) h.onLeave(m.id);
     };
@@ -127,6 +152,12 @@ class LocalTransport implements RoomTransport {
   }
 
   send(p: PeerPos) { this.bc?.postMessage({ type: "pos", p } satisfies LocalMsg); }
+
+  sendChat(m: ChatMsg) {
+    if (!this.bc) return false;
+    this.bc.postMessage({ type: "chat", m } satisfies LocalMsg);
+    return true;
+  }
 
   disconnect() {
     this.bc?.postMessage({ type: "bye", id: this.selfId } satisfies LocalMsg);

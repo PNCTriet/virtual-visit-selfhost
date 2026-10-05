@@ -8,12 +8,29 @@
  * - Your avatar is simulated locally; remote avatars are interpolated from Realtime broadcasts and
  *   play the walk animation in the direction they report.
  */
-import type { Facing, PeerMeta, PeerPos, RoomTransport, TransportStatus } from "@/lib/realtime";
+import type { ChatLine, SendChatResult } from "@/lib/chat";
+import {
+  BUBBLE_MS,
+  CHAT_MAX_PER_WINDOW,
+  CHAT_MIN_GAP_MS,
+  CHAT_RADIUS_PX,
+  CHAT_RECEIVE_RADIUS_PX,
+  CHAT_WINDOW_MS,
+  createRateLimiter,
+  formatChatTime,
+  sanitizeChat,
+} from "@/lib/chat";
+import type { ChatMsg, Facing, PeerMeta, PeerPos, RoomTransport, TransportStatus } from "@/lib/realtime";
 import { CHARACTER_COUNT, characterFor } from "@/lib/room";
 
 export type Person = { id: string; name: string; character: number };
 export type JoystickInput = { x: number; y: number };
-export type OfficeHandle = { destroy(): void };
+export type OfficeHandle = {
+  destroy(): void;
+  /** True while the chat field is focused, so WASD / the joystick don't walk. */
+  setTyping(typing: boolean): void;
+  sendChat(raw: string): SendChatResult;
+};
 
 type Options = {
   parent: HTMLElement;
@@ -22,6 +39,10 @@ type Options = {
   joystick: { current: JoystickInput };
   onPeople: (people: Person[]) => void;
   onStatus: (s: TransportStatus) => void;
+  /** Ids currently inside the chat radius. Fired only when the set changes. */
+  onNearby: (people: Person[]) => void;
+  /** A chat line that passed the proximity check (including our own sends). */
+  onChat: (line: ChatLine) => void;
   /**
    * Hidden recording mode for the landing-page clips (/room/x?demo=wide|phone). No network: a few
    * scripted visitors walk looping paths. Motion is a pure function of a clock (seconds), which can be
@@ -39,6 +60,14 @@ const HEARTBEAT = 2000;
 const STALE_AFTER = 12000;
 const LABEL_TEX = 40; // label font size in texture px, scaled down to LABEL_CSS screen px
 const LABEL_CSS = 12;
+const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif';
+
+function domTyping() {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
+}
 
 const walkKey = (c: number, f: Facing) => `walk-${c}-${f}`;
 const idleFrame = (c: number, f: Facing) => 4 * COLS + 4 * c + f;
@@ -75,8 +104,10 @@ function onPath(points: Pt[], pingPong: boolean, t: number): { x: number; y: num
 export async function startOffice(o: Options): Promise<OfficeHandle> {
   const Phaser = await import("phaser");
   type Sprite = Phaser.GameObjects.Sprite;
-  type Avatar = { sprite: Sprite; shadow: Phaser.GameObjects.Image; label: Phaser.GameObjects.Container; character: number; facing: Facing };
+  type Bubble = { root: Phaser.GameObjects.Container; until: number; text: string };
+  type Avatar = { sprite: Sprite; shadow: Phaser.GameObjects.Image; label: Phaser.GameObjects.Container; character: number; facing: Facing; bubble?: Bubble };
   type Remote = Avatar & PeerMeta & { x: number; y: number; m: boolean; seen: number };
+  let typing = false;
 
   const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
   let zoomCss = 2.5;
@@ -94,6 +125,10 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     demoT = 0;
     demoStickF: Facing | -1 = -1;
     lastSent = 0; lastX = NaN; lastY = NaN; lastF: Facing = 0; lastM = false; forceSend = true;
+    nearKey = "";
+    seenChat = new Set<string>();
+    inTimes = new Map<string, number[]>();
+    sendLimit = createRateLimiter({ minGapMs: CHAT_MIN_GAP_MS, windowMs: CHAT_WINDOW_MS, maxInWindow: CHAT_MAX_PER_WINDOW });
 
     constructor() { super("office"); }
 
@@ -124,7 +159,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       const objects = map.getObjectLayer("objects")?.objects ?? [];
       for (const ob of objects.filter((ob) => ob.type === "label")) {
         const t = this.add.text(ob.x!, ob.y!, ob.name.toUpperCase(), {
-          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
+          fontFamily: FONT,
           fontSize: `${LABEL_TEX}px`, fontStyle: "600", color: "#3a2a1a",
         }).setOrigin(0.5).setAlpha(0.32).setScale(6 / LABEL_TEX).setDepth(5).setLetterSpacing(6);
         t.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -161,14 +196,16 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         onJoin: () => { this.forceSend = true; },
         onLeave: (id) => this.removeRemote(id),
         onPos: (p) => this.onPos(p),
+        onChat: (m) => this.onChat(m),
       });
 
       // Read-only snapshot for QA / debugging.
       (window as unknown as { __vv: () => unknown }).__vv = () => ({
         kind: o.transport.kind,
         zoom: zoomCss,
-        self: this.snap(this.self, o.me.name),
+        self: { id: o.me.id, ...this.snap(this.self, o.me.name) },
         peers: [...this.remotes.values()].map((r) => ({ id: r.id, ...this.snap(r, r.name), m: r.m })),
+        near: this.nearbyPeople().map((p) => p.id),
       });
     }
 
@@ -210,12 +247,12 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     }
 
     snap(a: Avatar, name: string) {
-      return { name, x: Math.round(a.sprite.x), y: Math.round(a.sprite.y), f: a.facing, anim: a.sprite.anims.isPlaying ? a.sprite.anims.currentAnim?.key : "idle", frame: Number(a.sprite.frame.name) };
+      return { name, x: Math.round(a.sprite.x), y: Math.round(a.sprite.y), f: a.facing, anim: a.sprite.anims.isPlaying ? a.sprite.anims.currentAnim?.key : "idle", frame: Number(a.sprite.frame.name), bubble: a.bubble?.text ?? null };
     }
 
     makeLabel(name: string, self: boolean) {
       const text = this.add.text(0, 0, name, {
-        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif',
+        fontFamily: FONT,
         fontSize: `${LABEL_TEX}px`, fontStyle: "600", color: "#ffffff",
       }).setOrigin(0.5);
       text.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -256,10 +293,134 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     removeRemote(id: string) {
       const r = this.remotes.get(id);
       if (!r) return;
+      r.bubble?.root.destroy();
       r.sprite.destroy(); r.shadow.destroy(); r.label.destroy();
       this.labels = this.labels.filter((l) => l !== r.label);
       this.remotes.delete(id);
+      this.inTimes.delete(id);
       this.emitPeople();
+    }
+
+    /** People inside the chat radius, using their last reported position. */
+    nearbyPeople(): Person[] {
+      const me = this.self.sprite;
+      const out: Person[] = [];
+      for (const r of this.remotes.values()) {
+        if (Math.hypot(r.x - me.x, r.y - me.y) <= CHAT_RADIUS_PX) out.push({ id: r.id, name: r.name, character: r.character });
+      }
+      out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      return out;
+    }
+
+    publishNearby() {
+      const people = this.nearbyPeople();
+      const key = people.map((p) => p.id).join("\0");
+      if (key === this.nearKey) return;
+      this.nearKey = key;
+      o.onNearby(people);
+    }
+
+    allowIncoming(id: string, now: number) {
+      const recent = (this.inTimes.get(id) ?? []).filter((t) => now - t < 5000);
+      if (recent.length >= 4) { this.inTimes.set(id, recent); return false; }
+      recent.push(now);
+      this.inTimes.set(id, recent);
+      return true;
+    }
+
+    onChat(m: ChatMsg) {
+      if (destroyed || !m || typeof m.from !== "string" || m.from === o.me.id) return;
+      if (!Array.isArray(m.to) || !m.to.includes(o.me.id)) return;
+      const text = sanitizeChat(typeof m.text === "string" ? m.text : "");
+      if (!text) return;
+      const id = typeof m.id === "string" ? m.id.slice(0, 80) : "";
+      if (!id || this.seenChat.has(id)) return;
+      const r = this.remotes.get(m.from);
+      if (!r) return;
+      if (Math.hypot(r.x - this.self.sprite.x, r.y - this.self.sprite.y) > CHAT_RECEIVE_RADIUS_PX) return;
+      if (!this.allowIncoming(m.from, this.time.now)) return;
+      this.seenChat.add(id);
+      if (this.seenChat.size > 200) {
+        const oldest = this.seenChat.values().next().value;
+        if (oldest) this.seenChat.delete(oldest);
+      }
+      const t = typeof m.t === "number" && Number.isFinite(m.t) ? m.t : Date.now();
+      this.showBubble(r, text, r.name, t);
+      o.onChat({ id, name: r.name, text, t, self: false });
+    }
+
+    sendChat(raw: string): SendChatResult {
+      const text = sanitizeChat(raw);
+      if (!text) return { ok: false, reason: "empty" };
+      const near = this.nearbyPeople();
+      if (!near.length) return { ok: false, reason: "nobody" };
+      const now = Date.now();
+      if (!this.sendLimit.allow(now)) return { ok: false, reason: "rate" };
+      const msg: ChatMsg = {
+        id: crypto.randomUUID(),
+        from: o.me.id,
+        name: o.me.name,
+        text,
+        t: now,
+        x: Math.round(this.self.sprite.x * 10) / 10,
+        y: Math.round(this.self.sprite.y * 10) / 10,
+        to: near.map((p) => p.id),
+      };
+      if (!o.transport.sendChat(msg)) return { ok: false, reason: "offline" };
+      this.showBubble(this.self, text, o.me.name, now);
+      o.onChat({ id: msg.id, name: o.me.name, text, t: now, self: true });
+      return { ok: true };
+    }
+
+    bubbleScale() { return (14 / LABEL_CSS) * this.labelScale(); }
+
+    showBubble(a: Avatar, text: string, name: string, t: number) {
+      a.bubble?.root.destroy();
+      const body = this.add.text(0, 0, text, {
+        fontFamily: FONT, fontSize: `${LABEL_TEX}px`, fontStyle: "500", color: "#1d1d1f", align: "center",
+        wordWrap: { width: 520, useAdvancedWrap: true },
+      }).setOrigin(0.5, 0);
+      body.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+      const sub = this.add.text(0, 0, `${name} · ${formatChatTime(t)}`, {
+        fontFamily: FONT, fontSize: `${Math.round(LABEL_TEX * 0.72)}px`, fontStyle: "600", color: "#6e6e73", align: "center",
+      }).setOrigin(0.5, 0);
+      sub.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+      const padX = 28, padY = 18, gap = 8, tail = 14;
+      const w = Math.max(body.width, sub.width, 80) + padX * 2;
+      const h = padY + body.height + gap + sub.height + padY;
+      body.setPosition(0, -h - tail + padY);
+      sub.setPosition(0, -h - tail + padY + body.height + gap);
+      const g = this.add.graphics();
+      g.fillStyle(0xffffff, 0.96);
+      g.fillRoundedRect(-w / 2, -h - tail, w, h, 22);
+      g.fillTriangle(-12, -tail + 1, 12, -tail + 1, 0, 0);
+      g.lineStyle(2, 0x1d1d1f, 0.08);
+      g.strokeRoundedRect(-w / 2, -h - tail, w, h, 22);
+      const root = this.add.container(0, 0, [g, body, sub]).setDepth(1_000_005);
+      // Wall-clock lifetime so a long frame (tab waking up) doesn't erase a bubble that was just sent.
+      a.bubble = { root, until: Date.now() + BUBBLE_MS, text };
+      this.placeBubble(a);
+    }
+
+    placeBubble(a: Avatar) {
+      const b = a.bubble;
+      if (!b) return;
+      const labelHalf = (LABEL_CSS * 1.45) / 2 / zoomCss;
+      b.root.setScale(this.bubbleScale());
+      b.root.setPosition(a.sprite.x, a.sprite.y - 13 - labelHalf - 3 / zoomCss);
+    }
+
+    tickBubbles() {
+      const avatars: Avatar[] = [this.self, ...this.remotes.values()];
+      const now = Date.now();
+      for (const a of avatars) {
+        const b = a.bubble;
+        if (!b) continue;
+        const left = b.until - now;
+        if (left <= 0) { b.root.destroy(); a.bubble = undefined; continue; }
+        b.root.setAlpha(left < 500 ? Math.max(0, left / 500) : 1);
+        this.placeBubble(a);
+      }
     }
 
     emitPeople() {
@@ -281,10 +442,14 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     update(time: number, delta: number) {
       if (o.demo) return this.updateDemo(delta);
       const dt = Math.min(0.05, delta / 1000);
+      const typingNow = typing || domTyping();
       const k = this.keys;
-      let vx = (k.left.isDown || k.a.isDown ? -1 : 0) + (k.right.isDown || k.d.isDown ? 1 : 0);
-      let vy = (k.up.isDown || k.w.isDown ? -1 : 0) + (k.down.isDown || k.s.isDown ? 1 : 0);
-      if (!vx && !vy) { const j = o.joystick.current; if (Math.hypot(j.x, j.y) > 0.18) { vx = j.x; vy = j.y; } }
+      let vx = 0, vy = 0;
+      if (!typingNow) {
+        vx = (k.left.isDown || k.a.isDown ? -1 : 0) + (k.right.isDown || k.d.isDown ? 1 : 0);
+        vy = (k.up.isDown || k.w.isDown ? -1 : 0) + (k.down.isDown || k.s.isDown ? 1 : 0);
+        if (!vx && !vy) { const j = o.joystick.current; if (Math.hypot(j.x, j.y) > 0.18) { vx = j.x; vy = j.y; } }
+      }
       const len = Math.hypot(vx, vy);
       if (len > 1) { vx /= len; vy /= len; }
       const moving = len > 0;
@@ -315,10 +480,12 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         this.animate(r, walking);
         this.place(r);
       }
+      this.publishNearby();
+      this.tickBubbles();
     }
   }
 
-  if (destroyed) return { destroy() {} };
+  if (destroyed) return { destroy() {}, setTyping() {}, sendChat: () => ({ ok: false, reason: "offline" }) };
   const w = o.parent.clientWidth, h = o.parent.clientHeight, ratio = dpr();
   const game = new Phaser.Game({
     type: Phaser.AUTO,
@@ -356,6 +523,12 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       if (!o.demo) o.transport.disconnect();
       delete (window as unknown as { __vv?: unknown }).__vv;
       game.destroy(true);
+    },
+    setTyping(v: boolean) { typing = v; },
+    sendChat(raw: string) {
+      const scene = game.scene.getScene("office") as Office | null;
+      if (!scene?.sys.isActive() || !scene.mapW || o.demo) return { ok: false, reason: "offline" };
+      return scene.sendChat(raw);
     },
   };
 }

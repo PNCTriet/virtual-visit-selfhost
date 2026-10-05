@@ -14,6 +14,7 @@ A small, self-hosted, realtime virtual space. Visitors type a name, enter a room
 - Cute round avatars. Each gets a stable color derived from its name, plus a name label. Your own avatar is blue and has a pulse ring.
 - Move with **WASD / arrow keys**, or **click/tap** anywhere to walk there. Movement is smooth, and the camera follows you and clamps to the map edges. On phones the view zooms out slightly.
 - "Who's here" list in a side panel on desktop, or behind the "N here" button on mobile. The header also has **Copy link** and **Leave**.
+- Proximity chat when you stand within a few tiles of someone. See [Proximity chat](#proximity-chat).
 
 ## Run locally
 
@@ -57,9 +58,28 @@ All of the code lives in `lib/realtime.ts` behind a small `RoomTransport` interf
 - **Presence** (key = random per-tab id, meta = `{ id, name, color }`): `join` triggers an immediate position send so newcomers see everyone straight away. `leave` removes that avatar.
 - **Broadcast** `pos` events `{ id, name, color, x, y, t }`: these are sent at most every **75 ms (~13/s)**, and only while you move, plus a **2 s heartbeat** while idle. `self: false` means you don't receive your own messages. A `bye` event is sent on Leave / tab close for a faster cleanup.
 - **Remote avatars** are smoothed toward their last known position (exponential interpolation, which snaps when the jump is more than 400 px). Any peer silent for **12 s** is dropped as stale, which covers crashed tabs and lost connections.
-- **Local demo mode:** the same protocol (`hello` / `pos` / `bye`) over a `BroadcastChannel` with the same channel name.
+- **Broadcast** `chat` events `{ id, from, name, text, t, x, y, to }`: a short text message for the sender's proximity group. Same channel as positions, in both Supabase and local demo mode. See [Proximity chat](#proximity-chat).
+- **Local demo mode:** the same protocol (`hello` / `pos` / `chat` / `bye`) over a `BroadcastChannel` with the same channel name.
 
 The header badge shows `Connecting…`, `Live`, `Offline` (channel error/timeout; supabase-js keeps retrying), or `Local demo mode`.
+
+## Proximity chat
+
+Stand within **3 tiles** of another avatar (`CHAT_RADIUS_TILES` in `lib/chat.ts`, 16px tiles) and a **Chat** button appears. On a desktop, **Enter** opens it and sends; **Esc** closes it. On a phone, tap **Chat**. While the message field is focused, WASD and the joystick do not move you, so typing a name letter doesn't walk you across the room.
+
+Messages travel on the existing realtime transport (Supabase broadcast, or `BroadcastChannel` when env vars are missing). The sender only transmits when at least one person is inside the radius, and lists those peer ids. Each receiver drops the message unless that avatar is still nearby, because positions are client-authoritative. There is a small slack (three quarters of a tile) so a message sent at the edge isn't lost to one step of movement.
+
+What you see:
+
+- A compact panel with the sender's name, the time, and the text.
+- A speech bubble above the sender's avatar for a few seconds, with the same name and time.
+- A "left" line in the panel when someone walks out of range (or disconnects) while it is open.
+
+Nothing is stored. Refresh the page and the transcript is gone. Messages are plain text: trimmed, capped at **200 characters**, and rendered as text (not HTML). This tab also rate-limits sends (at most one every 700ms, and 5 per 10 seconds).
+
+The landing-page recording modes (`?demo=wide` and `?demo=phone`) do not open chat.
+
+Broadcasts are still room-wide at the transport level, same as positions. A modified client on the channel could read a `chat` payload it wasn't meant to show. The distance check is what the app enforces locally. Don't put anything private in a room.
 
 ## Limits and caveats
 
@@ -74,7 +94,9 @@ The header badge shows `Connecting…`, `Live`, `Offline` (channel error/timeout
 ```
 app/page.tsx              landing (name + room form, CSS preview)
 app/room/[id]/page.tsx    room route (validates id, renders the client-only Room)
-components/Room.tsx       canvas loop, input, camera, UI chrome, who's-here
+components/Room.tsx       room chrome, who's-here, proximity chat panel
+components/ProximityChat.tsx  chat hint, transcript, composer
+lib/chat.ts               proximity radius, message limits, rate limit
 lib/realtime.ts           RoomTransport: SupabaseTransport + LocalTransport
 lib/map.ts                map data, collision, spawn, name→color, room ids
 lib/render.ts             offscreen map rendering + avatar drawing
