@@ -102,10 +102,12 @@ const objects = [
   obj("Café", "label", 8 * 16, 25.6 * 16),
   obj("Arcade", "label", 32 * 16, 16.2 * 16),
   obj("HOWL STUDIO", "label", 20 * 16, 15.4 * 16),
-  // Meeting room = shared cinema (watch YouTube together)
+  // Meeting room = shared cinema (watch YouTube together). Enter through the east door.
   zone("cinema", 21 * 16, 3 * 16, 18 * 16, 8 * 16),
-  // East hall arcade + board just outside the play rug
-  zone("arcade", 28 * 16, 16 * 16, 11 * 16, 10 * 16),
+  // Tiles you can stand on beside the arcade cabinet (31–32, 19–20).
+  // Not the whole east hall: that rectangle reached the south corridor, so the
+  // play prompt appeared before you had walked up to the machine.
+  zone("arcade", 29 * 16, 18 * 16, 6 * 16, 5 * 16),
   zone("leaderboard", 27 * 16, 14 * 16, 6 * 16, 3 * 16),
 ];
 void DOORS;

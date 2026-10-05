@@ -24,6 +24,25 @@ function readName(): string | null {
 }
 
 /** Character head-and-shoulders from the sprite atlas (idle, facing down). */
+function UpArrowIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-7" aria-hidden>
+      <path d="M12 19V6M6.5 11.5 12 6l5.5 5.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ReactionsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-6" aria-hidden>
+      <circle cx="12" cy="12" r="8.25" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="9" cy="10.2" r="1" fill="currentColor" />
+      <circle cx="15" cy="10.2" r="1" fill="currentColor" />
+      <path d="M8.6 14.1c.85 1.35 2 2 3.4 2s2.55-.65 3.4-2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function CharacterIcon({ character, size = 22 }: { character: number; size?: number }) {
   const s = size / 16;
   return (
@@ -225,24 +244,35 @@ export function Room({ roomId }: { roomId: string }) {
         <div className="absolute inset-0 grid place-items-center text-[13px] text-white/70">Entering room…</div>
       )}
       {!demo && !loading && !modalOpen && (
-        <div className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10 flex items-end gap-2">
+        <div
+          className="absolute z-10"
+          style={{ left: "max(20px, env(safe-area-inset-left))", bottom: "max(18px, env(safe-area-inset-bottom))" }}
+        >
           <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} />
-          <button
-            type="button"
-            data-testid="jump-btn"
-            onClick={() => { officeRef.current?.jump(); }}
-            className="vv-glass vv-focus mb-2 grid size-12 place-items-center rounded-full text-[12px] font-semibold md:hidden"
-            aria-label="Jump"
-          >
-            Jump
-          </button>
         </div>
       )}
+      {!demo && !loading && !modalOpen && (
+        <button
+          type="button"
+          data-testid="jump-btn"
+          onClick={() => { officeRef.current?.jump(); }}
+          className="vv-glass vv-focus absolute z-20 grid size-14 place-items-center rounded-full text-foreground"
+          style={{ right: "max(16px, env(safe-area-inset-right))", bottom: "max(18px, env(safe-area-inset-bottom))" }}
+          aria-label="Jump"
+        >
+          <UpArrowIcon />
+        </button>
+      )}
       {(demo || loading) && (
-        <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
+        <div
+          className="absolute z-10"
+          style={{ left: "max(20px, env(safe-area-inset-left))", bottom: "max(18px, env(safe-area-inset-bottom))" }}
+        >
+          <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} />
+        </div>
       )}
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-3">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 px-3" style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}>
         <div className="vv-glass pointer-events-auto relative mx-auto flex h-12 max-w-[1240px] items-center gap-2 rounded-full pr-1.5 pl-4 sm:gap-3 sm:pl-5">
           <Link href="/" aria-label="HOWL STUDIO home" className="vv-focus shrink-0 rounded-full"><Logo compact /></Link>
           <span aria-hidden className="hidden h-4 w-px bg-black/10 sm:block" />
@@ -274,24 +304,68 @@ export function Room({ roomId }: { roomId: string }) {
             Leave
           </Link>
           {listOpen && (
-            <aside id="whos-here-pop" aria-label="Who's here" className="vv-glass absolute top-[56px] right-0 w-[230px] rounded-[22px] p-4 xl:hidden">
+            <aside id="whos-here-pop" aria-label="Who's here" className="vv-glass absolute top-[108px] right-0 w-[230px] rounded-[22px] p-4 xl:hidden">
               {list}
             </aside>
           )}
         </div>
       </header>
 
-      <aside aria-label="Who's here" className="vv-glass absolute top-[72px] right-3 z-10 hidden w-[230px] rounded-[22px] p-4 xl:block">
+      <aside
+        aria-label="Who's here"
+        className="vv-glass absolute right-3 z-10 hidden w-[230px] rounded-[22px] p-4 xl:block"
+        style={{ top: "calc(max(12px, env(safe-area-inset-top)) + 120px)" }}
+      >
         {list}
       </aside>
 
       <Leaderboard roomId={roomId} open={showBoardNear} variant="compact" title="Arcade ranks" />
 
       {!demo && !loading && !modalOpen && (
-        <div className="absolute right-3 bottom-[max(90px,calc(env(safe-area-inset-bottom)+90px))] z-20 flex flex-col items-end gap-2">
+        <div
+          className="absolute z-20"
+          style={{
+            top: "calc(max(12px, env(safe-area-inset-top)) + 56px)",
+            right: "max(12px, env(safe-area-inset-right))",
+          }}
+        >
+          <button
+            type="button"
+            data-testid="react-btn"
+            onClick={() => setReactOpen((v) => !v)}
+            className="vv-glass vv-focus grid size-11 place-items-center rounded-full text-foreground"
+            aria-expanded={reactOpen}
+            aria-label="Reactions"
+          >
+            <ReactionsIcon />
+          </button>
+          {reactOpen && (
+            <div className="vv-glass absolute top-0 right-[calc(100%+8px)] flex max-w-[calc(100vw-80px)] gap-1 overflow-x-auto rounded-full p-1.5">
+              {REACT_EMOJIS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className="vv-focus grid size-9 shrink-0 place-items-center rounded-full text-[18px] hover:bg-black/[0.06]"
+                  onClick={() => {
+                    officeRef.current?.sendReact(emoji);
+                    setReactOpen(false);
+                  }}
+                  aria-label={`React ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!demo && !loading && !modalOpen && (zones.cinema || zones.arcade || zones.leaderboard) && (
+        <div className="vv-zone-prompt absolute left-1/2 z-20 flex max-w-[calc(100vw-32px)] -translate-x-1/2 flex-col items-center gap-2">
           {zones.cinema && (
             <button
               type="button"
+              data-testid="zone-cinema"
               onClick={() => setCinemaOpen(true)}
               className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
             >
@@ -301,6 +375,7 @@ export function Room({ roomId }: { roomId: string }) {
           {zones.arcade && (
             <button
               type="button"
+              data-testid="zone-arcade"
               onClick={() => setGameOpen(true)}
               className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
             >
@@ -310,40 +385,13 @@ export function Room({ roomId }: { roomId: string }) {
           {zones.leaderboard && !zones.arcade && (
             <button
               type="button"
+              data-testid="zone-leaderboard"
               onClick={() => setBoardModal(true)}
               className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
             >
               View ranks
             </button>
           )}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setReactOpen((v) => !v)}
-              className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
-              aria-expanded={reactOpen}
-            >
-              React
-            </button>
-            {reactOpen && (
-              <div className="vv-glass absolute right-0 bottom-[52px] flex gap-1 rounded-full p-1.5">
-                {REACT_EMOJIS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="vv-focus grid size-9 place-items-center rounded-full text-[18px] hover:bg-black/[0.06]"
-                    onClick={() => {
-                      officeRef.current?.sendReact(emoji);
-                      setReactOpen(false);
-                    }}
-                    aria-label={`React ${emoji}`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       )}
 

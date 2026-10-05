@@ -173,6 +173,12 @@ body {
 
   .vv-char { display: inline-block; background-image: url("/game/characters.png"); background-repeat: no-repeat; image-rendering: pixelated; border-radius: 6px; background-color: rgb(0 0 0 / 0.04); }
 
+  /* Zone prompt sits above the joystick on phones and above the keyboard hint on desktop. */
+  .vv-zone-prompt { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 136px); }
+  @media (min-width: 768px) {
+    .vv-zone-prompt { bottom: calc(max(18px, env(safe-area-inset-bottom)) + 76px); }
+  }
+
   .vv-joy { display: none; }
   @media (max-width: 767px), (pointer: coarse) {
     .vv-joy {
