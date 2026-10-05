@@ -19,6 +19,8 @@ export const viewport: Viewport = {
   colorScheme: "light",
   width: "device-width",
   initialScale: 1,
+  // The on-screen keyboard overlays the room instead of resizing the map and joystick.
+  interactiveWidget: "overlays-content",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

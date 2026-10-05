@@ -5,10 +5,12 @@ import Link from "next/link";
 import { Logo } from "./Logo";
 import { Joystick } from "./Joystick";
 import { NamePrompt } from "./NamePrompt";
+import { ProximityChat } from "./ProximityChat";
 import { createTransport, realtimeConfigured, type PeerMeta, type TransportKind, type TransportStatus } from "@/lib/realtime";
 import { characterFor, colorFor } from "@/lib/room";
 import { validateName } from "@/lib/name";
-import type { JoystickInput, Person } from "@/lib/game/office";
+import type { SendChatReason, TranscriptLine } from "@/lib/chat";
+import type { JoystickInput, OfficeHandle, Person } from "@/lib/game/office";
 
 function readName(): string | null {
   const q = new URLSearchParams(window.location.search).get("name");
@@ -37,6 +39,9 @@ function CharacterIcon({ character, size = 22 }: { character: number; size?: num
 export function Room({ roomId }: { roomId: string }) {
   const screenRef = useRef<HTMLDivElement>(null);
   const joystick = useRef<JoystickInput>({ x: 0, y: 0 });
+  const officeRef = useRef<OfficeHandle | null>(null);
+  const chatOpenRef = useRef(false);
+  const nearRef = useRef<Map<string, string>>(new Map());
   // Client-only component (loaded with ssr:false), so sessionStorage is available here.
   const [me, setMe] = useState<PeerMeta | null>(() => {
     const name = readName();
@@ -54,9 +59,33 @@ export function Room({ roomId }: { roomId: string }) {
   const [demoStick, setDemoStick] = useState<JoystickInput | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   const [listOpen, setListOpen] = useState(false);
+  const [nearby, setNearby] = useState<Person[]>([]);
+  const [lines, setLines] = useState<TranscriptLine[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
+  // Drop the transcript when the room or the local player changes. Adjusting state
+  // during render is the supported way to react to a new id without an effect.
+  const chatKey = `${roomId}:${me?.id ?? ""}`;
+  const [chatScope, setChatScope] = useState(chatKey);
+  if (chatScope !== chatKey) {
+    setChatScope(chatKey);
+    setLines([]);
+    setNearby([]);
+    setChatOpen(false);
+    setChatNotice(null);
+  }
+
+  useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+
+  useEffect(() => {
+    if (!chatNotice) return;
+    const id = window.setTimeout(() => setChatNotice(null), 2600);
+    return () => window.clearTimeout(id);
+  }, [chatNotice]);
 
   useEffect(() => {
     if (!me) return;
+    nearRef.current = new Map();
     let handle: { destroy(): void } | null = null;
     let cancelled = false;
     const transport = createTransport(roomId);
@@ -64,13 +93,31 @@ export function Room({ roomId }: { roomId: string }) {
       parent: screenRef.current!, me, transport, joystick, demo, onDemoStick: setDemoStick,
       onPeople: setPeople,
       onStatus: setStatus,
+      onNearby: (people) => {
+        setNearby(people);
+        const prev = nearRef.current;
+        const next = new Map(people.map((p) => [p.id, p.name]));
+        if (chatOpenRef.current) {
+          const left: TranscriptLine[] = [];
+          for (const [id, name] of prev) {
+            if (!next.has(id)) left.push({ kind: "system", id: `left-${id}-${Date.now()}`, text: `${name} left`, t: Date.now() });
+          }
+          if (left.length) setLines((ls) => [...ls, ...left].slice(-80));
+        }
+        nearRef.current = next;
+      },
+      onChat: (line) => {
+        const msg: TranscriptLine = { kind: "msg", id: line.id, name: line.name, text: line.text, t: line.t, self: line.self };
+        setLines((ls) => [...ls, msg].slice(-80));
+      },
     })).then((h) => {
-      if (cancelled) h.destroy(); else { handle = h; setLoading(false); }
+      if (cancelled) h.destroy(); else { handle = h; officeRef.current = h; setLoading(false); }
     }).catch(() => setStatus("error"));
     const onHide = () => transport.disconnect();
     window.addEventListener("pagehide", onHide);
     return () => {
       cancelled = true;
+      officeRef.current = null;
       window.removeEventListener("pagehide", onHide);
       if (handle) handle.destroy(); else transport.disconnect();
     };
@@ -98,6 +145,19 @@ export function Room({ roomId }: { roomId: string }) {
         : status === "error"
           ? { text: "Offline", dot: "bg-[#ff3b30]", title: "Could not connect to the realtime room." }
           : { text: "Connecting…", dot: "bg-[#c7c7cc]", title: "Connecting to the realtime room." };
+
+  const sendChat = (text: string) => {
+    const res = officeRef.current?.sendChat(text) ?? { ok: false as const, reason: "offline" as const };
+    if (res.ok) { setChatNotice(null); return true; }
+    const copy: Record<SendChatReason, string | null> = {
+      empty: null,
+      rate: "Slow down a moment.",
+      nobody: "No one is close enough to hear you.",
+      offline: "Can't reach the room right now.",
+    };
+    setChatNotice(copy[res.reason]);
+    return false;
+  };
 
   const list = (
     <>
@@ -171,9 +231,21 @@ export function Room({ roomId }: { roomId: string }) {
         {list}
       </aside>
 
-      <p className="vv-glass pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 rounded-full px-4 py-2 text-center text-[13px] text-muted md:block">
+      <p className={`vv-glass pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 rounded-full px-4 py-2 text-center text-[13px] text-muted md:block ${chatOpen ? "md:hidden" : ""}`}>
         <kbd className="font-sans font-semibold text-foreground">WASD</kbd> or <kbd className="font-sans font-semibold text-foreground">arrow keys</kbd> to walk around
       </p>
+
+      <ProximityChat
+        enabled={!demo && !loading}
+        nearby={nearby}
+        lines={lines}
+        open={chatOpen}
+        notice={chatNotice}
+        onOpen={() => setChatOpen(true)}
+        onClose={() => { setChatOpen(false); setChatNotice(null); }}
+        onSend={sendChat}
+        onTyping={(v) => { officeRef.current?.setTyping(v); if (v) joystick.current = { x: 0, y: 0 }; }}
+      />
     </div>
   );
 }
