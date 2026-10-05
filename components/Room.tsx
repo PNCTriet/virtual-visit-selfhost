@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Logo } from "./Logo";
 import { Joystick } from "./Joystick";
+import { NamePrompt } from "./NamePrompt";
 import { createTransport, realtimeConfigured, type PeerMeta, type TransportKind, type TransportStatus } from "@/lib/realtime";
 import { characterFor, colorFor } from "@/lib/room";
 import { validateName } from "@/lib/name";
@@ -35,13 +35,17 @@ function CharacterIcon({ character, size = 22 }: { character: number; size?: num
 }
 
 export function Room({ roomId }: { roomId: string }) {
-  const router = useRouter();
   const screenRef = useRef<HTMLDivElement>(null);
   const joystick = useRef<JoystickInput>({ x: 0, y: 0 });
   // Client-only component (loaded with ssr:false), so sessionStorage is available here.
-  const [me] = useState<PeerMeta | null>(() => {
+  const [me, setMe] = useState<PeerMeta | null>(() => {
     const name = readName();
     return name ? { id: crypto.randomUUID(), name, color: colorFor(name) } : null;
+  });
+  // Hidden recording mode for the landing clips; see `demo` in lib/game/office.ts.
+  const [demo] = useState<"wide" | "phone" | null>(() => {
+    const d = new URLSearchParams(window.location.search).get("demo");
+    return d === "wide" || d === "phone" ? d : null;
   });
   const kind: TransportKind = realtimeConfigured ? "supabase" : "local";
   const [status, setStatus] = useState<TransportStatus>("connecting");
@@ -51,16 +55,12 @@ export function Room({ roomId }: { roomId: string }) {
   const [listOpen, setListOpen] = useState(false);
 
   useEffect(() => {
-    if (!me) router.replace(`/?room=${encodeURIComponent(roomId)}`);
-  }, [me, roomId, router]);
-
-  useEffect(() => {
     if (!me) return;
     let handle: { destroy(): void } | null = null;
     let cancelled = false;
     const transport = createTransport(roomId);
     import("@/lib/game/office").then(({ startOffice }) => startOffice({
-      parent: screenRef.current!, me, transport, joystick,
+      parent: screenRef.current!, me, transport, joystick, demo,
       onPeople: setPeople,
       onStatus: setStatus,
     })).then((h) => {
@@ -73,14 +73,21 @@ export function Room({ roomId }: { roomId: string }) {
       window.removeEventListener("pagehide", onHide);
       if (handle) handle.destroy(); else transport.disconnect();
     };
-  }, [me, roomId]);
+  }, [me, roomId, demo]);
 
   const everyone = useMemo(
     () => (me ? [{ id: me.id, name: me.name, character: characterFor(me.name), self: true }, ...people] : []),
     [me, people],
   );
 
-  if (!me) return null;
+  if (!me) {
+    return (
+      <NamePrompt
+        roomId={roomId}
+        onSubmit={(name) => { sessionStorage.setItem("vv-name", name); setMe({ id: crypto.randomUUID(), name, color: colorFor(name) }); }}
+      />
+    );
+  }
 
   const badge =
     kind === "local"

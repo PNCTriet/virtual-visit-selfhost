@@ -22,6 +22,12 @@ type Options = {
   joystick: { current: JoystickInput };
   onPeople: (people: Person[]) => void;
   onStatus: (s: TransportStatus) => void;
+  /**
+   * Hidden recording mode for the landing-page clips (/room/x?demo=wide|phone). No network: a few
+   * scripted visitors walk looping paths. Motion is a pure function of a clock (seconds), which can be
+   * driven frame by frame through `window.__vvClock`, so recordings are smooth and loop exactly.
+   */
+  demo?: "wide" | "phone" | null;
 };
 
 const COLS = CHARACTER_COUNT * 4; // frames per row in characters.png
@@ -35,6 +41,34 @@ const LABEL_CSS = 12;
 const walkKey = (c: number, f: Facing) => `walk-${c}-${f}`;
 const idleFrame = (c: number, f: Facing) => 4 * COLS + 4 * c + f;
 const facingOf = (vx: number, vy: number): Facing => (Math.abs(vx) > Math.abs(vy) ? (vx < 0 ? 2 : 3) : vy < 0 ? 1 : 0);
+
+/** Demo loop length (s). Every path is walked exactly once per loop, so clips loop seamlessly. */
+export const DEMO_LOOP = 10;
+type Pt = [number, number];
+const DEMO_BOTS: { name: string; path: Pt[]; pingPong?: boolean; phase: number }[] = [
+  { name: "Mai", path: [[136, 248], [136, 392], [232, 392], [232, 248]], phase: 0.1 },
+  { name: "Linh", path: [[56, 152], [152, 152], [152, 320], [232, 320]], pingPong: true, phase: 0.35 },
+  { name: "Khoa", path: [[440, 152], [488, 152], [488, 320], [392, 320]], pingPong: true, phase: 0.6 },
+  { name: "Ivan", path: [[424, 248], [584, 248], [584, 400], [424, 400]], phase: 0.8 },
+];
+const DEMO_SELF: Pt[] = [[392, 248], [392, 400], [248, 400], [248, 248]];
+
+/** Position + facing at time t on a closed (or ping-pong) path walked once every DEMO_LOOP seconds. */
+function onPath(points: Pt[], pingPong: boolean, t: number): { x: number; y: number; f: Facing } {
+  const pts = pingPong ? [...points, ...points.slice(1, -1).reverse()] : points;
+  const segs = pts.map((p, i) => [p, pts[(i + 1) % pts.length]] as const);
+  const lens = segs.map(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1]));
+  const total = lens.reduce((x, y) => x + y, 0);
+  let d = ((((t / DEMO_LOOP) % 1) + 1) % 1) * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (d <= lens[i] || i === segs.length - 1) {
+      const [a, b] = segs[i], k = lens[i] ? Math.min(1, d / lens[i]) : 0;
+      return { x: a[0] + (b[0] - a[0]) * k, y: a[1] + (b[1] - a[1]) * k, f: facingOf(b[0] - a[0], b[1] - a[1]) };
+    }
+    d -= lens[i];
+  }
+  return { x: pts[0][0], y: pts[0][1], f: 0 };
+}
 
 export async function startOffice(o: Options): Promise<OfficeHandle> {
   const Phaser = await import("phaser");
@@ -54,6 +88,8 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     floorTexts: Phaser.GameObjects.Text[] = [];
     mapW = 0;
     mapH = 0;
+    bots: Avatar[] = [];
+    demoT = 0;
     lastSent = 0; lastX = NaN; lastY = NaN; lastF: Facing = 0; lastM = false; forceSend = true;
 
     constructor() { super("office"); }
@@ -116,7 +152,8 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       this.keys = this.input.keyboard!.addKeys({ up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT, w: K.W, a: K.A, s: K.S, d: K.D }) as Office["keys"];
       this.game.events.on(Phaser.Core.Events.BLUR, () => this.input.keyboard?.resetKeys());
 
-      o.transport.connect(o.me, {
+      if (o.demo) this.startDemo();
+      else o.transport.connect(o.me, {
         onStatus: o.onStatus,
         onJoin: () => { this.forceSend = true; },
         onLeave: (id) => this.removeRemote(id),
@@ -127,11 +164,40 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       (window as unknown as { __vv: () => unknown }).__vv = () => ({
         kind: o.transport.kind,
         zoom: zoomCss,
-        fps: Math.round(this.game.loop.actualFps),
-        dt: [Math.round(this.game.loop.delta * 10) / 10, Math.round(this.game.loop.rawDelta * 10) / 10, this.game.loop.inFocus],
         self: this.snap(this.self, o.me.name),
         peers: [...this.remotes.values()].map((r) => ({ id: r.id, ...this.snap(r, r.name), m: r.m })),
       });
+    }
+
+    startDemo() {
+      for (const b of DEMO_BOTS) {
+        const character = characterFor(b.name);
+        const sprite = this.add.sprite(0, 0, "chars", idleFrame(character, 0));
+        this.bots.push({ sprite, shadow: this.add.image(0, 0, "shadow"), label: this.makeLabel(b.name, false), character, facing: 0 });
+      }
+      this.self.sprite.body!.enable = false;
+      if (o.demo === "wide") {
+        // Fixed camera framing the lounge + meeting room doors and the café.
+        this.cameras.main.stopFollow();
+        this.cameras.main.centerOn(320, 236);
+      }
+      o.onStatus("live");
+      o.onPeople(DEMO_BOTS.map((b, i) => ({ id: `demo-${i}`, name: b.name, character: characterFor(b.name) })).sort((a, b) => a.name.localeCompare(b.name)));
+    }
+
+    updateDemo(delta: number) {
+      const clock = (window as unknown as { __vvClock?: number }).__vvClock;
+      this.demoT = typeof clock === "number" ? clock : this.demoT + delta / 1000;
+      const t = this.demoT;
+      const row = Math.floor(t * 8) % 4; // 8 fps walk cycle → 80 frames per loop
+      const step = (a: Avatar, p: { x: number; y: number; f: Facing }) => {
+        a.facing = p.f;
+        a.sprite.anims.stop();
+        a.sprite.setPosition(p.x, p.y).setFrame(row * COLS + 4 * a.character + p.f);
+        this.place(a);
+      };
+      DEMO_BOTS.forEach((b, i) => step(this.bots[i], onPath(b.path, !!b.pingPong, t + b.phase * DEMO_LOOP)));
+      step(this.self, onPath(DEMO_SELF, false, t));
     }
 
     snap(a: Avatar, name: string) {
@@ -151,12 +217,14 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       return label;
     }
 
-    labelScale() { return LABEL_CSS / (LABEL_TEX * zoomCss); }
+    labelScale() { return (o.demo === "wide" ? 22 : o.demo === "phone" ? 15 : LABEL_CSS) / (LABEL_TEX * zoomCss); }
 
     applyZoom() {
       const w = o.parent.clientWidth, h = o.parent.clientHeight;
       // Pixel-art zoom: 2.5x on desktop, a bit less on phones; never show space outside the map.
       zoomCss = Math.max(w < 640 ? 2.25 : 2.5, w / this.mapW, h / this.mapH);
+      if (o.demo === "wide") zoomCss = w / 384; // ~24 tiles across
+      if (o.demo === "phone") zoomCss = Math.max(w / 150, h / this.mapH);
       this.cameras.main.setZoom(zoomCss * dpr());
       const s = this.labelScale();
       for (const l of this.labels) l.setScale(s);
@@ -202,6 +270,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     }
 
     update(time: number, delta: number) {
+      if (o.demo) return this.updateDemo(delta);
       const dt = Math.min(0.05, delta / 1000);
       const k = this.keys;
       let vx = (k.left.isDown || k.a.isDown ? -1 : 0) + (k.right.isDown || k.d.isDown ? 1 : 0);
@@ -275,7 +344,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     destroy() {
       destroyed = true;
       ro.disconnect();
-      o.transport.disconnect();
+      if (!o.demo) o.transport.disconnect();
       delete (window as unknown as { __vv?: unknown }).__vv;
       game.destroy(true);
     },

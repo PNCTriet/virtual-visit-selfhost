@@ -135,10 +135,41 @@ body {
 
 /* ---------- Landing: MacBook mock (as in the HowlsOS proposal). The room itself is full-viewport. ---------- */
 @layer components {
+  /* ---------- Landing hero: one viewport on desktop, devices sized by height ---------- */
+  .vv-page { display: flex; min-height: 100dvh; flex-direction: column; }
+  .vv-landing { display: grid; align-items: center; justify-items: center; gap: 28px; text-align: center; }
+  .vv-landing-copy { width: 100%; }
+  .vv-landing-phone { width: min(46vw, calc(min(52dvh, 440px) * 654 / 1355)); }
+  @media (max-height: 700px) and (max-width: 767px) { .vv-landing-phone { width: calc(43dvh * 654 / 1355); } }
+  @media (max-width: 767px) { .vv-hero { font-size: clamp(44px, 12.5vw, 64px); } .vv-lead { font-size: 18px; } }
+  @media (min-width: 768px) {
+    .vv-page { height: 100dvh; overflow: hidden; }
+    .vv-landing { gap: 32px; }
+    /* Stacked (tablet): copy above, devices below, both inside the viewport. */
+    .vv-stage { --stage-w: min(100%, calc((100dvh - 470px) * 1.72)); }
+  }
+  @media (min-width: 1024px) {
+    .vv-landing { grid-template-columns: minmax(0, 0.6fr) minmax(0, 1.4fr); gap: 48px; text-align: left; justify-items: stretch; }
+    .vv-hero { font-size: clamp(64px, 6.4vw, 96px); }
+    .vv-stage { --stage-w: min(100%, calc((100dvh - 150px) * 1.72)); }
+  }
+
+  /* MacBook with the iPhone overlapping its lower-right corner. */
+  .vv-stage { position: relative; width: var(--stage-w, 100%); aspect-ratio: 1.72; margin-inline: auto; }
+  .vv-stage-mac { position: absolute; left: 0; top: 0; width: 90%; }
+  .vv-stage-phone { position: absolute; right: 0; bottom: 0; width: 23%; z-index: 2; }
+
+  /* Bezel images are transparent in the screen; the screen sits underneath, bezel on top. */
   .vv-device { position: relative; width: 100%; aspect-ratio: 1903 / 1148; }
-  /* Transparent screen rect of the bezel image, measured in HowlsOS (src/app/p/[id]/devices.tsx). */
+  /* MacBook screen rect, measured in HowlsOS (src/app/p/[id]/devices.tsx). */
   .vv-screen { position: absolute; left: 10.247%; top: 2.352%; width: 79.506%; height: 85.627%; overflow: hidden; border-radius: 1.2% / 1.9%; background: #1d1d1f; }
-  .vv-bezel { position: relative; z-index: 1; display: block; width: 100%; height: auto; pointer-events: none; user-select: none; filter: drop-shadow(0 24px 40px rgb(0 0 0 / 0.12)); }
+  .vv-phone { position: relative; width: 100%; aspect-ratio: 654 / 1355; filter: drop-shadow(0 18px 28px rgb(0 0 0 / 0.22)); }
+  /* iPhone 16 Pro screen rect: flood-fill alpha scan of the bezel (604 × 1311 px, corner radius ≈ 100 px). */
+  .vv-phone-screen { position: absolute; left: 3.823%; top: 1.624%; width: 92.355%; height: 96.753%; overflow: hidden; border-radius: 16.5% / 7.6%; background: #1d1d1f; }
+  .vv-bezel { position: relative; z-index: 1; display: block; width: 100%; height: auto; pointer-events: none; user-select: none; }
+  .vv-device .vv-bezel { filter: drop-shadow(0 24px 40px rgb(0 0 0 / 0.12)); }
+  .vv-clip-poster, .vv-clip-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  @media (prefers-reduced-motion: reduce) { .vv-clip-video { display: none; } }
 
   .vv-char { display: inline-block; background-image: url("/game/characters.png"); background-repeat: no-repeat; image-rendering: pixelated; border-radius: 6px; background-color: rgb(0 0 0 / 0.04); }
 
