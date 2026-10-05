@@ -9,7 +9,10 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
 export type PeerMeta = { id: string; name: string; color: string };
-export type PeerPos = PeerMeta & { x: number; y: number; t: number };
+/** 0 = down, 1 = up, 2 = left, 3 = right (columns of the character spritesheet). */
+export type Facing = 0 | 1 | 2 | 3;
+/** One broadcast "pos" message: world px position, facing, whether the avatar is walking, sender time. */
+export type PeerPos = PeerMeta & { x: number; y: number; f: Facing; m: boolean; t: number };
 export type TransportKind = "supabase" | "local";
 export type TransportStatus = "connecting" | "live" | "error";
 

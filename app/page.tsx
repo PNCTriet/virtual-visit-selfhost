@@ -1,6 +1,6 @@
 import { Logo } from "@/components/Logo";
 import { Landing } from "@/components/Landing";
-import { normalizeRoomId } from "@/lib/map";
+import { normalizeRoomId } from "@/lib/room";
 
 export default async function Home({ searchParams }: PageProps<"/">) {
   const { room } = await searchParams;

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { RoomLoader } from "@/components/RoomLoader";
-import { ROOM_ID_RE } from "@/lib/map";
+import { ROOM_ID_RE } from "@/lib/room";
 
 export async function generateMetadata({ params }: PageProps<"/room/[id]">): Promise<Metadata> {
   const { id } = await params;

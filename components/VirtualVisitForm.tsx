@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { NAME_MAX_LENGTH, validateName } from "@/lib/name";
-import { normalizeRoomId } from "@/lib/map";
+import { normalizeRoomId } from "@/lib/room";
 
 type Props = {
   name?: string;
