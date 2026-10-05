@@ -6,7 +6,12 @@ import type { JoystickInput } from "@/lib/game/office";
 const RADIUS = 42;
 
 /** Tiny on-screen joystick for touch. Reports a normalized vector (length ≤ 1) on every move. */
-export function Joystick({ onChange, className = "" }: { onChange: (v: JoystickInput) => void; className?: string }) {
+export function Joystick({ onChange, display, className = "" }: {
+  onChange: (v: JoystickInput) => void;
+  /** Recording mode only: show the knob (and a fingertip) at this vector instead of following touches. */
+  display?: JoystickInput;
+  className?: string;
+}) {
   const baseRef = useRef<HTMLDivElement>(null);
   const pointer = useRef<number | null>(null);
   const [knob, setKnob] = useState({ x: 0, y: 0 });
@@ -28,6 +33,7 @@ export function Joystick({ onChange, className = "" }: { onChange: (v: JoystickI
     onChange({ x: 0, y: 0 });
   };
 
+  const k = display ? { x: display.x * RADIUS, y: display.y * RADIUS } : knob;
   return (
     <div
       ref={baseRef}
@@ -43,8 +49,15 @@ export function Joystick({ onChange, className = "" }: { onChange: (v: JoystickI
       <span
         aria-hidden
         className="vv-joy-knob absolute top-1/2 left-1/2 size-[54px] rounded-full"
-        style={{ transform: `translate(calc(-50% + ${knob.x}px), calc(-50% + ${knob.y}px))`, transition: !dragging ? "transform .18s cubic-bezier(.2,.8,.2,1)" : "none" }}
+        style={{ transform: `translate(calc(-50% + ${k.x}px), calc(-50% + ${k.y}px))`, transition: !dragging && !display ? "transform .18s cubic-bezier(.2,.8,.2,1)" : "none" }}
       />
+      {display && (
+        <span
+          aria-hidden
+          className="absolute top-1/2 left-1/2 size-[44px] rounded-full bg-black/20 ring-2 ring-white/70"
+          style={{ transform: `translate(calc(-50% + ${k.x + 6}px), calc(-50% + ${k.y + 8}px))` }}
+        />
+      )}
     </div>
   );
 }

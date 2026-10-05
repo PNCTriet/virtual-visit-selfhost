@@ -28,6 +28,8 @@ type Options = {
    * driven frame by frame through `window.__vvClock`, so recordings are smooth and loop exactly.
    */
   demo?: "wide" | "phone" | null;
+  /** Demo "phone" mode: where the on-screen joystick knob should appear (mirrors the scripted walk). */
+  onDemoStick?: (v: JoystickInput) => void;
 };
 
 const COLS = CHARACTER_COUNT * 4; // frames per row in characters.png
@@ -46,12 +48,12 @@ const facingOf = (vx: number, vy: number): Facing => (Math.abs(vx) > Math.abs(vy
 export const DEMO_LOOP = 10;
 type Pt = [number, number];
 const DEMO_BOTS: { name: string; path: Pt[]; pingPong?: boolean; phase: number }[] = [
-  { name: "Mai", path: [[136, 248], [136, 392], [232, 392], [232, 248]], phase: 0.1 },
+  { name: "Mai", path: [[56, 248], [56, 320], [232, 320], [232, 248]], phase: 0.1 },
   { name: "Linh", path: [[56, 152], [152, 152], [152, 320], [232, 320]], pingPong: true, phase: 0.35 },
   { name: "Khoa", path: [[440, 152], [488, 152], [488, 320], [392, 320]], pingPong: true, phase: 0.6 },
-  { name: "Ivan", path: [[424, 248], [584, 248], [584, 400], [424, 400]], phase: 0.8 },
+  { name: "Ivan", path: [[424, 248], [600, 248], [600, 320], [424, 320]], phase: 0.8 },
 ];
-const DEMO_SELF: Pt[] = [[392, 248], [392, 400], [248, 400], [248, 248]];
+const DEMO_SELF: Pt[] = [[248, 248], [392, 248], [392, 352], [248, 352]];
 
 /** Position + facing at time t on a closed (or ping-pong) path walked once every DEMO_LOOP seconds. */
 function onPath(points: Pt[], pingPong: boolean, t: number): { x: number; y: number; f: Facing } {
@@ -90,6 +92,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     mapH = 0;
     bots: Avatar[] = [];
     demoT = 0;
+    demoStickF: Facing | -1 = -1;
     lastSent = 0; lastX = NaN; lastY = NaN; lastF: Facing = 0; lastM = false; forceSend = true;
 
     constructor() { super("office"); }
@@ -179,7 +182,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       if (o.demo === "wide") {
         // Fixed camera framing the lounge + meeting room doors and the café.
         this.cameras.main.stopFollow();
-        this.cameras.main.centerOn(320, 236);
+        this.cameras.main.centerOn(320, 196);
       }
       o.onStatus("live");
       o.onPeople(DEMO_BOTS.map((b, i) => ({ id: `demo-${i}`, name: b.name, character: characterFor(b.name) })).sort((a, b) => a.name.localeCompare(b.name)));
@@ -197,7 +200,13 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         this.place(a);
       };
       DEMO_BOTS.forEach((b, i) => step(this.bots[i], onPath(b.path, !!b.pingPong, t + b.phase * DEMO_LOOP)));
-      step(this.self, onPath(DEMO_SELF, false, t));
+      const me = onPath(DEMO_SELF, false, t);
+      step(this.self, me);
+      if (o.demo === "phone" && me.f !== this.demoStickF) {
+        this.demoStickF = me.f;
+        const v = ([[0, 1], [0, -1], [-1, 0], [1, 0]] as const)[me.f];
+        o.onDemoStick?.({ x: v[0] * 0.8, y: v[1] * 0.8 });
+      }
     }
 
     snap(a: Avatar, name: string) {
@@ -223,7 +232,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       const w = o.parent.clientWidth, h = o.parent.clientHeight;
       // Pixel-art zoom: 2.5x on desktop, a bit less on phones; never show space outside the map.
       zoomCss = Math.max(w < 640 ? 2.25 : 2.5, w / this.mapW, h / this.mapH);
-      if (o.demo === "wide") zoomCss = w / 384; // ~24 tiles across
+      if (o.demo === "wide") zoomCss = w / 448; // 28 tiles across: lounge, meeting room and café
       if (o.demo === "phone") zoomCss = Math.max(w / 150, h / this.mapH);
       this.cameras.main.setZoom(zoomCss * dpr());
       const s = this.labelScale();

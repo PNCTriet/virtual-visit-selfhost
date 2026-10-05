@@ -51,6 +51,7 @@ export function Room({ roomId }: { roomId: string }) {
   const [status, setStatus] = useState<TransportStatus>("connecting");
   const [people, setPeople] = useState<Person[]>([]);
   const [loading, setLoading] = useState(true);
+  const [demoStick, setDemoStick] = useState<JoystickInput | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   const [listOpen, setListOpen] = useState(false);
 
@@ -60,7 +61,7 @@ export function Room({ roomId }: { roomId: string }) {
     let cancelled = false;
     const transport = createTransport(roomId);
     import("@/lib/game/office").then(({ startOffice }) => startOffice({
-      parent: screenRef.current!, me, transport, joystick, demo,
+      parent: screenRef.current!, me, transport, joystick, demo, onDemoStick: setDemoStick,
       onPeople: setPeople,
       onStatus: setStatus,
     })).then((h) => {
@@ -125,7 +126,7 @@ export function Room({ roomId }: { roomId: string }) {
       {loading && (
         <div className="absolute inset-0 grid place-items-center text-[13px] text-white/70">Entering room…</div>
       )}
-      <Joystick onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
+      <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-3">
         <div className="vv-glass pointer-events-auto relative mx-auto flex h-12 max-w-[1240px] items-center gap-2 rounded-full pr-1.5 pl-4 sm:gap-3 sm:pl-5">
