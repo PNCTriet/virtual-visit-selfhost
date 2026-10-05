@@ -129,10 +129,10 @@ export function ProximityChat({
             <button
               type="button"
               onClick={() => { onTyping(false); inputRef.current?.blur(); onClose(); }}
-              className="vv-focus grid size-7 shrink-0 place-items-center rounded-full text-[13px] text-muted hover:bg-black/[0.05]"
+              className="vv-focus grid size-7 shrink-0 place-items-center rounded-full text-[18px] leading-none text-muted hover:bg-black/[0.05]"
               aria-label="Close chat"
             >
-              Esc
+              ×
             </button>
           </header>
 

@@ -396,22 +396,30 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       g.fillTriangle(-12, -tail + 1, 12, -tail + 1, 0, 0);
       g.lineStyle(2, 0x1d1d1f, 0.08);
       g.strokeRoundedRect(-w / 2, -h - tail, w, h, 22);
-      const root = this.add.container(a.sprite.x, a.sprite.y, [g, body, sub]).setDepth(1_000_005).setScale(this.bubbleScale());
-      a.bubble = { root, until: this.time.now + BUBBLE_MS, text };
+      const root = this.add.container(0, 0, [g, body, sub]).setDepth(1_000_005);
+      // Wall-clock lifetime so a long frame (tab waking up) doesn't erase a bubble that was just sent.
+      a.bubble = { root, until: Date.now() + BUBBLE_MS, text };
+      this.placeBubble(a);
     }
 
-    tickBubbles(time: number) {
-      const scale = this.bubbleScale();
+    placeBubble(a: Avatar) {
+      const b = a.bubble;
+      if (!b) return;
       const labelHalf = (LABEL_CSS * 1.45) / 2 / zoomCss;
+      b.root.setScale(this.bubbleScale());
+      b.root.setPosition(a.sprite.x, a.sprite.y - 13 - labelHalf - 3 / zoomCss);
+    }
+
+    tickBubbles() {
       const avatars: Avatar[] = [this.self, ...this.remotes.values()];
+      const now = Date.now();
       for (const a of avatars) {
         const b = a.bubble;
         if (!b) continue;
-        const left = b.until - time;
+        const left = b.until - now;
         if (left <= 0) { b.root.destroy(); a.bubble = undefined; continue; }
         b.root.setAlpha(left < 500 ? Math.max(0, left / 500) : 1);
-        b.root.setScale(scale);
-        b.root.setPosition(a.sprite.x, a.sprite.y - 13 - labelHalf - 3 / zoomCss);
+        this.placeBubble(a);
       }
     }
 
@@ -473,7 +481,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         this.place(r);
       }
       this.publishNearby();
-      this.tickBubbles(time);
+      this.tickBubbles();
     }
   }
 
