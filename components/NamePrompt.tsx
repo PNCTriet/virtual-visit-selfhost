@@ -50,7 +50,7 @@ export function NamePrompt({ roomId, onSubmit }: { roomId: string; onSubmit: (na
           }}
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
-            if (e.isComposing || e.keyCode === 229 || composingRef.current) {
+            if (e.nativeEvent.isComposing || e.keyCode === 229 || composingRef.current) {
               e.preventDefault();
             }
           }}

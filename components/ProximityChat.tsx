@@ -223,7 +223,7 @@ export function ProximityChat({
               onChange={(e) => {
                 const next = e.target.value;
                 // During IME composition, mirror the native buffer without grapheme slicing.
-                if (composingRef.current || e.nativeEvent.isComposing) {
+                if (composingRef.current || (e.nativeEvent as InputEvent).isComposing) {
                   setDraft(next);
                   return;
                 }
@@ -236,7 +236,7 @@ export function ProximityChat({
               }}
               onKeyDown={(e) => {
                 if (e.key !== "Enter") return;
-                if (e.isComposing || e.keyCode === 229 || composingRef.current) {
+                if (e.nativeEvent.isComposing || e.keyCode === 229 || composingRef.current) {
                   e.preventDefault();
                   e.stopPropagation();
                 }

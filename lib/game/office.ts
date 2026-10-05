@@ -703,7 +703,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     physics: { default: "arcade", arcade: { debug: false } },
     scale: { mode: Phaser.Scale.NONE, zoom: 1 / ratio },
     scene: Office,
-    fps: { target: 60, forceSet: true },
+    fps: { target: 60 },
   });
 
   const setFps = (typingMode: boolean) => {
