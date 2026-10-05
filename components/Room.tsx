@@ -6,11 +6,14 @@ import { Logo } from "./Logo";
 import { Joystick } from "./Joystick";
 import { NamePrompt } from "./NamePrompt";
 import { ProximityChat } from "./ProximityChat";
-import { createTransport, realtimeConfigured, type PeerMeta, type TransportKind, type TransportStatus } from "@/lib/realtime";
+import { CinemaPanel } from "./CinemaPanel";
+import { Leaderboard } from "./Leaderboard";
+import { MiniGame } from "./MiniGame";
+import { createTransport, realtimeConfigured, type CinemaMsg, type PeerMeta, type TransportKind, type TransportStatus } from "@/lib/realtime";
 import { characterFor, colorFor } from "@/lib/room";
 import { validateName } from "@/lib/name";
-import type { SendChatReason, TranscriptLine } from "@/lib/chat";
-import type { JoystickInput, OfficeHandle, Person } from "@/lib/game/office";
+import { REACT_EMOJIS, type SendChatReason, type TranscriptLine } from "@/lib/chat";
+import type { JoystickInput, OfficeHandle, Person, ZoneFlags } from "@/lib/game/office";
 
 function readName(): string | null {
   const q = new URLSearchParams(window.location.search).get("name");
@@ -42,6 +45,7 @@ export function Room({ roomId }: { roomId: string }) {
   const officeRef = useRef<OfficeHandle | null>(null);
   const chatOpenRef = useRef(false);
   const nearRef = useRef<Map<string, string>>(new Map());
+  const zonesRef = useRef<ZoneFlags>({ cinema: false, arcade: false, leaderboard: false });
   // Client-only component (loaded with ssr:false), so sessionStorage is available here.
   const [me, setMe] = useState<PeerMeta | null>(() => {
     const name = readName();
@@ -63,6 +67,13 @@ export function Room({ roomId }: { roomId: string }) {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatNotice, setChatNotice] = useState<string | null>(null);
+  const [zones, setZones] = useState<ZoneFlags>({ cinema: false, arcade: false, leaderboard: false });
+  const [cinemaOpen, setCinemaOpen] = useState(false);
+  const [cinemaState, setCinemaState] = useState<CinemaMsg | null>(null);
+  const [gameOpen, setGameOpen] = useState(false);
+  const [boardModal, setBoardModal] = useState(false);
+  const [reactOpen, setReactOpen] = useState(false);
+
   // Drop the transcript when the room or the local player changes. Adjusting state
   // during render is the supported way to react to a new id without an effect.
   const chatKey = `${roomId}:${me?.id ?? ""}`;
@@ -73,15 +84,30 @@ export function Room({ roomId }: { roomId: string }) {
     setNearby([]);
     setChatOpen(false);
     setChatNotice(null);
+    setCinemaOpen(false);
+    setCinemaState(null);
+    setGameOpen(false);
+    setBoardModal(false);
+    setZones({ cinema: false, arcade: false, leaderboard: false });
   }
 
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+  useEffect(() => { zonesRef.current = zones; }, [zones]);
 
   useEffect(() => {
     if (!chatNotice) return;
     const id = window.setTimeout(() => setChatNotice(null), 2600);
     return () => window.clearTimeout(id);
   }, [chatNotice]);
+
+  // Leave cinema / mute when walking out of the zone.
+  useEffect(() => {
+    if (!zones.cinema && cinemaOpen) setCinemaOpen(false);
+  }, [zones.cinema, cinemaOpen]);
+
+  useEffect(() => {
+    officeRef.current?.setLocked(cinemaOpen || gameOpen || boardModal);
+  }, [cinemaOpen, gameOpen, boardModal]);
 
   useEffect(() => {
     if (!me) return;
@@ -109,6 +135,15 @@ export function Room({ roomId }: { roomId: string }) {
       onChat: (line) => {
         const msg: TranscriptLine = { kind: "msg", id: line.id, name: line.name, text: line.text, t: line.t, self: line.self };
         setLines((ls) => [...ls, msg].slice(-80));
+      },
+      onReact: (line) => {
+        const msg: TranscriptLine = { kind: "react", id: line.id, name: line.name, emoji: line.emoji, t: line.t, self: line.self };
+        setLines((ls) => [...ls, msg].slice(-80));
+      },
+      onZones: setZones,
+      onCinema: (m) => {
+        setCinemaState(m);
+        if (zonesRef.current.cinema) setCinemaOpen(true);
       },
     })).then((h) => {
       if (cancelled) h.destroy(); else { handle = h; officeRef.current = h; setLoading(false); }
@@ -174,6 +209,9 @@ export function Room({ roomId }: { roomId: string }) {
     </>
   );
 
+  const modalOpen = cinemaOpen || gameOpen || boardModal;
+  const showBoardNear = (zones.leaderboard || zones.arcade) && !modalOpen && !demo && !loading;
+
   return (
     <div className="vv-room fixed inset-0 overflow-hidden bg-[#1d1d1f]">
       {/* Game fills the whole viewport; UI floats on top. */}
@@ -181,12 +219,28 @@ export function Room({ roomId }: { roomId: string }) {
         ref={screenRef}
         className="absolute inset-0 touch-none"
         role="application"
-        aria-label={`Room ${roomId}: ${everyone.length} ${everyone.length === 1 ? "person" : "people"} here. Move with WASD or the arrow keys.`}
+        aria-label={`Room ${roomId}: ${everyone.length} ${everyone.length === 1 ? "person" : "people"} here. Move with WASD or the arrow keys. Space to jump.`}
       />
       {loading && (
         <div className="absolute inset-0 grid place-items-center text-[13px] text-white/70">Entering room…</div>
       )}
-      <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
+      {!demo && !loading && !modalOpen && (
+        <div className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10 flex items-end gap-2">
+          <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} />
+          <button
+            type="button"
+            data-testid="jump-btn"
+            onClick={() => { officeRef.current?.jump(); }}
+            className="vv-glass vv-focus mb-2 grid size-12 place-items-center rounded-full text-[12px] font-semibold md:hidden"
+            aria-label="Jump"
+          >
+            Jump
+          </button>
+        </div>
+      )}
+      {(demo || loading) && (
+        <Joystick display={demoStick} onChange={(v) => { joystick.current = v; }} className="absolute bottom-[max(18px,env(safe-area-inset-bottom))] left-5 z-10" />
+      )}
 
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20 px-3 pt-3">
         <div className="vv-glass pointer-events-auto relative mx-auto flex h-12 max-w-[1240px] items-center gap-2 rounded-full pr-1.5 pl-4 sm:gap-3 sm:pl-5">
@@ -231,12 +285,74 @@ export function Room({ roomId }: { roomId: string }) {
         {list}
       </aside>
 
-      <p className={`vv-glass pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 rounded-full px-4 py-2 text-center text-[13px] text-muted md:block ${chatOpen ? "md:hidden" : ""}`}>
-        <kbd className="font-sans font-semibold text-foreground">WASD</kbd> or <kbd className="font-sans font-semibold text-foreground">arrow keys</kbd> to walk around
+      <Leaderboard roomId={roomId} open={showBoardNear} variant="compact" title="Arcade ranks" />
+
+      {!demo && !loading && !modalOpen && (
+        <div className="absolute right-3 bottom-[max(90px,calc(env(safe-area-inset-bottom)+90px))] z-20 flex flex-col items-end gap-2">
+          {zones.cinema && (
+            <button
+              type="button"
+              onClick={() => setCinemaOpen(true)}
+              className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
+            >
+              Open cinema
+            </button>
+          )}
+          {zones.arcade && (
+            <button
+              type="button"
+              onClick={() => setGameOpen(true)}
+              className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
+            >
+              Play Pattern Memory
+            </button>
+          )}
+          {zones.leaderboard && !zones.arcade && (
+            <button
+              type="button"
+              onClick={() => setBoardModal(true)}
+              className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
+            >
+              View ranks
+            </button>
+          )}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setReactOpen((v) => !v)}
+              className="vv-glass vv-focus h-11 rounded-full px-3.5 text-[14px] font-medium"
+              aria-expanded={reactOpen}
+            >
+              React
+            </button>
+            {reactOpen && (
+              <div className="vv-glass absolute right-0 bottom-[52px] flex gap-1 rounded-full p-1.5">
+                {REACT_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="vv-focus grid size-9 place-items-center rounded-full text-[18px] hover:bg-black/[0.06]"
+                    onClick={() => {
+                      officeRef.current?.sendReact(emoji);
+                      setReactOpen(false);
+                    }}
+                    aria-label={`React ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <p className={`vv-glass pointer-events-none absolute bottom-5 left-1/2 z-10 hidden -translate-x-1/2 rounded-full px-4 py-2 text-center text-[13px] text-muted md:block ${chatOpen || modalOpen ? "md:hidden" : ""}`}>
+        <kbd className="font-sans font-semibold text-foreground">WASD</kbd> walk · <kbd className="font-sans font-semibold text-foreground">Space</kbd> jump
       </p>
 
       <ProximityChat
-        enabled={!demo && !loading}
+        enabled={!demo && !loading && !modalOpen}
         nearby={nearby}
         lines={lines}
         open={chatOpen}
@@ -245,6 +361,32 @@ export function Room({ roomId }: { roomId: string }) {
         onClose={() => { setChatOpen(false); setChatNotice(null); }}
         onSend={sendChat}
         onTyping={(v) => { officeRef.current?.setTyping(v); if (v) joystick.current = { x: 0, y: 0 }; }}
+      />
+
+      <CinemaPanel
+        open={cinemaOpen && !demo}
+        state={cinemaState}
+        selfId={me.id}
+        onClose={() => setCinemaOpen(false)}
+        onPublish={(next) => {
+          setCinemaState(next);
+          officeRef.current?.sendCinema(next);
+        }}
+      />
+
+      <MiniGame
+        roomId={roomId}
+        playerName={me.name}
+        open={gameOpen && !demo}
+        onClose={() => setGameOpen(false)}
+      />
+
+      <Leaderboard
+        roomId={roomId}
+        open={boardModal && !demo}
+        variant="modal"
+        title="Arcade ranks"
+        onClose={() => setBoardModal(false)}
       />
     </div>
   );

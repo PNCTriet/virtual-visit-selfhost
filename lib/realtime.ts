@@ -2,8 +2,8 @@
  * Realtime transport behind a tiny interface, so Supabase can be swapped for PartyKit,
  * Cloudflare Durable Objects, etc. without touching the game code.
  *
- * - "supabase": Supabase Realtime. Broadcast carries positions and proximity chat; Presence
- *   tracks join/leave. No tables, no auth: only NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
+ * - "supabase": Supabase Realtime. Broadcast carries positions, chat, emotes, cinema; Presence
+ *   tracks join/leave. No auth: only NEXT_PUBLIC_SUPABASE_URL + NEXT_PUBLIC_SUPABASE_ANON_KEY.
  * - "local": BroadcastChannel fallback when the env vars are missing (tabs of the same browser).
  */
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
@@ -27,6 +27,27 @@ export type ChatMsg = {
   y: number;
   to: string[];
 };
+/** Short jump impulse — separate from the pos stream to keep quota low. */
+export type JumpMsg = { id: string; t: number };
+/** Floating reaction emoji above an avatar. */
+export type ReactMsg = {
+  id: string;
+  from: string;
+  name: string;
+  emoji: string;
+  t: number;
+  x: number;
+  y: number;
+};
+/** Shared cinema / YouTube state (last-write-wins). */
+export type CinemaMsg = {
+  url: string;
+  playing: boolean;
+  tMedia: number;
+  tWall: number;
+  by: string;
+};
+
 export type TransportKind = "supabase" | "local";
 export type TransportStatus = "connecting" | "live" | "error";
 
@@ -37,6 +58,9 @@ export type TransportHandlers = {
   onJoin: () => void;
   onStatus: (s: TransportStatus) => void;
   onChat: (m: ChatMsg) => void;
+  onJump: (m: JumpMsg) => void;
+  onReact: (m: ReactMsg) => void;
+  onCinema: (m: CinemaMsg) => void;
 };
 
 export interface RoomTransport {
@@ -45,6 +69,9 @@ export interface RoomTransport {
   send(p: PeerPos): void;
   /** @returns false when the socket isn't open yet (message was not sent). */
   sendChat(m: ChatMsg): boolean;
+  sendJump(m: JumpMsg): boolean;
+  sendReact(m: ReactMsg): boolean;
+  sendCinema(m: CinemaMsg): boolean;
   disconnect(): void;
 }
 
@@ -88,6 +115,9 @@ class SupabaseTransport implements RoomTransport {
       this.channel = ch;
       ch.on("broadcast", { event: "pos" }, ({ payload }) => h.onPos(payload as PeerPos))
         .on("broadcast", { event: "chat" }, ({ payload }) => h.onChat(payload as ChatMsg))
+        .on("broadcast", { event: "jump" }, ({ payload }) => h.onJump(payload as JumpMsg))
+        .on("broadcast", { event: "react" }, ({ payload }) => h.onReact(payload as ReactMsg))
+        .on("broadcast", { event: "cinema" }, ({ payload }) => h.onCinema(payload as CinemaMsg))
         .on("broadcast", { event: "bye" }, ({ payload }) => h.onLeave((payload as { id: string }).id))
         .on("presence", { event: "join" }, ({ key }) => { if (key !== self.id) h.onJoin(); })
         .on("presence", { event: "leave" }, ({ key }) => { if (key !== self.id) h.onLeave(key); })
@@ -117,6 +147,24 @@ class SupabaseTransport implements RoomTransport {
     return true;
   }
 
+  sendJump(m: JumpMsg) {
+    if (!this.ready) return false;
+    void this.channel?.send({ type: "broadcast", event: "jump", payload: m });
+    return true;
+  }
+
+  sendReact(m: ReactMsg) {
+    if (!this.ready) return false;
+    void this.channel?.send({ type: "broadcast", event: "react", payload: m });
+    return true;
+  }
+
+  sendCinema(m: CinemaMsg) {
+    if (!this.ready) return false;
+    void this.channel?.send({ type: "broadcast", event: "cinema", payload: m });
+    return true;
+  }
+
   disconnect() {
     this.closed = true;
     const ch = this.channel;
@@ -127,7 +175,14 @@ class SupabaseTransport implements RoomTransport {
   }
 }
 
-type LocalMsg = { type: "pos"; p: PeerPos } | { type: "chat"; m: ChatMsg } | { type: "hello"; id: string } | { type: "bye"; id: string };
+type LocalMsg =
+  | { type: "pos"; p: PeerPos }
+  | { type: "chat"; m: ChatMsg }
+  | { type: "jump"; m: JumpMsg }
+  | { type: "react"; m: ReactMsg }
+  | { type: "cinema"; m: CinemaMsg }
+  | { type: "hello"; id: string }
+  | { type: "bye"; id: string };
 
 class LocalTransport implements RoomTransport {
   readonly kind = "local" as const;
@@ -144,6 +199,9 @@ class LocalTransport implements RoomTransport {
       const m = e.data;
       if (m.type === "pos" && m.p.id !== self.id) h.onPos(m.p);
       else if (m.type === "chat" && m.m.from !== self.id) h.onChat(m.m);
+      else if (m.type === "jump" && m.m.id !== self.id) h.onJump(m.m);
+      else if (m.type === "react" && m.m.from !== self.id) h.onReact(m.m);
+      else if (m.type === "cinema" && m.m.by !== self.id) h.onCinema(m.m);
       else if (m.type === "hello" && m.id !== self.id) h.onJoin();
       else if (m.type === "bye" && m.id !== self.id) h.onLeave(m.id);
     };
@@ -156,6 +214,24 @@ class LocalTransport implements RoomTransport {
   sendChat(m: ChatMsg) {
     if (!this.bc) return false;
     this.bc.postMessage({ type: "chat", m } satisfies LocalMsg);
+    return true;
+  }
+
+  sendJump(m: JumpMsg) {
+    if (!this.bc) return false;
+    this.bc.postMessage({ type: "jump", m } satisfies LocalMsg);
+    return true;
+  }
+
+  sendReact(m: ReactMsg) {
+    if (!this.bc) return false;
+    this.bc.postMessage({ type: "react", m } satisfies LocalMsg);
+    return true;
+  }
+
+  sendCinema(m: CinemaMsg) {
+    if (!this.bc) return false;
+    this.bc.postMessage({ type: "cinema", m } satisfies LocalMsg);
     return true;
   }
 

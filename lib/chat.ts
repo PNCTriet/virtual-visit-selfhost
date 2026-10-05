@@ -22,6 +22,14 @@ export const CHAT_MIN_GAP_MS = 700;
 export const CHAT_WINDOW_MS = 10_000;
 export const CHAT_MAX_PER_WINDOW = 5;
 
+/** Quick reaction emoji set (fixed list — no uploads). */
+export const REACT_EMOJIS = ["👍", "😂", "❤️", "👏", "🔥", "🎉", "😮", "✨"] as const;
+export type ReactEmoji = (typeof REACT_EMOJIS)[number];
+export const REACT_MIN_GAP_MS = 1500;
+export const REACT_WINDOW_MS = 60_000;
+export const REACT_MAX_PER_WINDOW = 8;
+export const REACT_BUBBLE_MS = 2800;
+
 /** How long a speech bubble stays up, in ms. */
 export const BUBBLE_MS = 4500;
 
@@ -36,6 +44,10 @@ export function sanitizeChat(raw: string): string | null {
   return chars.slice(0, CHAT_MAX_CHARS).join("");
 }
 
+export function isReactEmoji(raw: string): raw is ReactEmoji {
+  return (REACT_EMOJIS as readonly string[]).includes(raw);
+}
+
 export function formatChatTime(t: number): string {
   const d = new Date(t);
   if (Number.isNaN(d.getTime())) return "";
@@ -46,8 +58,10 @@ export type SendChatReason = "empty" | "rate" | "nobody" | "offline";
 export type SendChatResult = { ok: true } | { ok: false; reason: SendChatReason };
 
 export type ChatLine = { id: string; name: string; text: string; t: number; self: boolean };
+export type ReactLine = { id: string; name: string; emoji: string; t: number; self: boolean };
 export type TranscriptLine =
   | (ChatLine & { kind: "msg" })
+  | (ReactLine & { kind: "react" })
   | { kind: "system"; id: string; text: string; t: number };
 
 export function createRateLimiter(opts: { minGapMs: number; windowMs: number; maxInWindow: number }) {

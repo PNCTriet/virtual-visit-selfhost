@@ -8,7 +8,7 @@
  * - Your avatar is simulated locally; remote avatars are interpolated from Realtime broadcasts and
  *   play the walk animation in the direction they report.
  */
-import type { ChatLine, SendChatResult } from "@/lib/chat";
+import type { ChatLine, ReactLine, SendChatResult } from "@/lib/chat";
 import {
   BUBBLE_MS,
   CHAT_MAX_PER_WINDOW,
@@ -16,21 +16,45 @@ import {
   CHAT_RADIUS_PX,
   CHAT_RECEIVE_RADIUS_PX,
   CHAT_WINDOW_MS,
+  REACT_BUBBLE_MS,
+  REACT_MAX_PER_WINDOW,
+  REACT_MIN_GAP_MS,
+  REACT_WINDOW_MS,
   createRateLimiter,
   formatChatTime,
+  isReactEmoji,
   sanitizeChat,
 } from "@/lib/chat";
-import type { ChatMsg, Facing, PeerMeta, PeerPos, RoomTransport, TransportStatus } from "@/lib/realtime";
+import type {
+  ChatMsg,
+  CinemaMsg,
+  Facing,
+  JumpMsg,
+  PeerMeta,
+  PeerPos,
+  ReactMsg,
+  RoomTransport,
+  TransportStatus,
+} from "@/lib/realtime";
 import { CHARACTER_COUNT, characterFor } from "@/lib/room";
 
 export type Person = { id: string; name: string; character: number };
 export type JoystickInput = { x: number; y: number };
+export type ZoneFlags = { cinema: boolean; arcade: boolean; leaderboard: boolean };
+
 export type OfficeHandle = {
   destroy(): void;
   /** True while the chat field is focused, so WASD / the joystick don't walk. */
   setTyping(typing: boolean): void;
+  /** Lock movement while a modal (cinema / mini-game) is open. */
+  setLocked(locked: boolean): void;
   sendChat(raw: string): SendChatResult;
+  jump(): boolean;
+  sendReact(emoji: string): boolean;
+  sendCinema(state: CinemaMsg): boolean;
 };
+
+type ZoneRect = { name: string; x: number; y: number; w: number; h: number };
 
 type Options = {
   parent: HTMLElement;
@@ -43,6 +67,9 @@ type Options = {
   onNearby: (people: Person[]) => void;
   /** A chat line that passed the proximity check (including our own sends). */
   onChat: (line: ChatLine) => void;
+  onReact: (line: ReactLine) => void;
+  onZones: (z: ZoneFlags) => void;
+  onCinema: (m: CinemaMsg) => void;
   /**
    * Hidden recording mode for the landing-page clips (/room/x?demo=wide|phone). No network: a few
    * scripted visitors walk looping paths. Motion is a pure function of a clock (seconds), which can be
@@ -61,6 +88,9 @@ const STALE_AFTER = 12000;
 const LABEL_TEX = 40; // label font size in texture px, scaled down to LABEL_CSS screen px
 const LABEL_CSS = 12;
 const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif';
+const JUMP_COOLDOWN = 600;
+const JUMP_MS = 320;
+const JUMP_PX = 10;
 
 function domTyping() {
   const el = document.activeElement;
@@ -105,9 +135,22 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
   const Phaser = await import("phaser");
   type Sprite = Phaser.GameObjects.Sprite;
   type Bubble = { root: Phaser.GameObjects.Container; until: number; text: string };
-  type Avatar = { sprite: Sprite; shadow: Phaser.GameObjects.Image; label: Phaser.GameObjects.Container; character: number; facing: Facing; bubble?: Bubble };
+  type FloatReact = { root: Phaser.GameObjects.Text; until: number };
+  type Avatar = {
+    sprite: Sprite;
+    shadow: Phaser.GameObjects.Image;
+    label: Phaser.GameObjects.Container;
+    character: number;
+    facing: Facing;
+    bubble?: Bubble;
+    react?: FloatReact;
+    jumpUntil?: number;
+    /** Physics/floor Y; sprite.y may be offset for the jump visual. */
+    floorY?: number;
+  };
   type Remote = Avatar & PeerMeta & { x: number; y: number; m: boolean; seen: number };
   let typing = false;
+  let locked = false;
 
   const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
   let zoomCss = 2.5;
@@ -116,9 +159,10 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
   class Office extends Phaser.Scene {
     self!: Avatar & { sprite: Phaser.Physics.Arcade.Sprite };
     remotes = new Map<string, Remote>();
-    keys!: Record<"up" | "down" | "left" | "right" | "w" | "a" | "s" | "d", Phaser.Input.Keyboard.Key>;
+    keys!: Record<"up" | "down" | "left" | "right" | "w" | "a" | "s" | "d" | "space", Phaser.Input.Keyboard.Key>;
     labels: Phaser.GameObjects.Container[] = [];
     floorTexts: Phaser.GameObjects.Text[] = [];
+    zones: ZoneRect[] = [];
     mapW = 0;
     mapH = 0;
     bots: Avatar[] = [];
@@ -126,9 +170,13 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     demoStickF: Facing | -1 = -1;
     lastSent = 0; lastX = NaN; lastY = NaN; lastF: Facing = 0; lastM = false; forceSend = true;
     nearKey = "";
+    zoneKey = "";
     seenChat = new Set<string>();
     inTimes = new Map<string, number[]>();
     sendLimit = createRateLimiter({ minGapMs: CHAT_MIN_GAP_MS, windowMs: CHAT_WINDOW_MS, maxInWindow: CHAT_MAX_PER_WINDOW });
+    reactLimit = createRateLimiter({ minGapMs: REACT_MIN_GAP_MS, windowMs: REACT_WINDOW_MS, maxInWindow: REACT_MAX_PER_WINDOW });
+    lastJumpAt = 0;
+    spaceWasDown = false;
 
     constructor() { super("office"); }
 
@@ -165,6 +213,15 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         t.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
         this.floorTexts.push(t);
       }
+      this.zones = objects
+        .filter((ob) => ob.type === "zone" && typeof ob.name === "string")
+        .map((ob) => ({
+          name: ob.name,
+          x: ob.x ?? 0,
+          y: ob.y ?? 0,
+          w: ob.width || 16,
+          h: ob.height || 16,
+        }));
 
       // Spawn near the map's spawn point, on a free tile.
       const sp = objects.find((ob) => ob.type === "spawn") ?? { x: this.mapW / 2, y: this.mapH / 2 };
@@ -187,7 +244,9 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       this.applyZoom();
 
       const K = Phaser.Input.Keyboard.KeyCodes;
-      this.keys = this.input.keyboard!.addKeys({ up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT, w: K.W, a: K.A, s: K.S, d: K.D }) as Office["keys"];
+      this.keys = this.input.keyboard!.addKeys({
+        up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT, w: K.W, a: K.A, s: K.S, d: K.D, space: K.SPACE,
+      }) as Office["keys"];
       this.game.events.on(Phaser.Core.Events.BLUR, () => this.input.keyboard?.resetKeys());
 
       if (o.demo) this.startDemo();
@@ -197,6 +256,9 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         onLeave: (id) => this.removeRemote(id),
         onPos: (p) => this.onPos(p),
         onChat: (m) => this.onChat(m),
+        onJump: (m) => this.onJump(m),
+        onReact: (m) => this.onReactMsg(m),
+        onCinema: (m) => o.onCinema(m),
       });
 
       // Read-only snapshot for QA / debugging.
@@ -206,6 +268,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         self: { id: o.me.id, ...this.snap(this.self, o.me.name) },
         peers: [...this.remotes.values()].map((r) => ({ id: r.id, ...this.snap(r, r.name), m: r.m })),
         near: this.nearbyPeople().map((p) => p.id),
+        zones: this.currentZones(),
       });
     }
 
@@ -294,6 +357,7 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       const r = this.remotes.get(id);
       if (!r) return;
       r.bubble?.root.destroy();
+      r.react?.root.destroy();
       r.sprite.destroy(); r.shadow.destroy(); r.label.destroy();
       this.labels = this.labels.filter((l) => l !== r.label);
       this.remotes.delete(id);
@@ -318,6 +382,20 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       if (key === this.nearKey) return;
       this.nearKey = key;
       o.onNearby(people);
+    }
+
+    currentZones(): ZoneFlags {
+      const { x, y } = this.self.sprite;
+      const hit = (name: string) => this.zones.some((z) => z.name === name && x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h);
+      return { cinema: hit("cinema"), arcade: hit("arcade"), leaderboard: hit("leaderboard") };
+    }
+
+    publishZones() {
+      const z = this.currentZones();
+      const key = `${z.cinema}|${z.arcade}|${z.leaderboard}`;
+      if (key === this.zoneKey) return;
+      this.zoneKey = key;
+      o.onZones(z);
     }
 
     allowIncoming(id: string, now: number) {
@@ -372,6 +450,81 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       return { ok: true };
     }
 
+    playJump(a: Avatar) {
+      a.jumpUntil = Date.now() + JUMP_MS;
+      a.floorY = a.floorY ?? a.sprite.y;
+    }
+
+    jump(): boolean {
+      if (typing || locked || domTyping() || o.demo) return false;
+      const now = Date.now();
+      if (now - this.lastJumpAt < JUMP_COOLDOWN) return false;
+      this.lastJumpAt = now;
+      this.playJump(this.self);
+      const msg: JumpMsg = { id: o.me.id, t: now };
+      o.transport.sendJump(msg);
+      return true;
+    }
+
+    onJump(m: JumpMsg) {
+      if (!m || typeof m.id !== "string" || m.id === o.me.id) return;
+      if (typeof m.t === "number" && Date.now() - m.t > 2000) return;
+      const r = this.remotes.get(m.id);
+      if (r) this.playJump(r);
+    }
+
+    sendReact(emoji: string): boolean {
+      if (!isReactEmoji(emoji) || o.demo) return false;
+      const now = Date.now();
+      if (!this.reactLimit.allow(now)) return false;
+      const msg: ReactMsg = {
+        id: crypto.randomUUID(),
+        from: o.me.id,
+        name: o.me.name,
+        emoji,
+        t: now,
+        x: Math.round(this.self.sprite.x * 10) / 10,
+        y: Math.round(this.self.sprite.y * 10) / 10,
+      };
+      if (!o.transport.sendReact(msg)) return false;
+      this.showReact(this.self, emoji);
+      o.onReact({ id: msg.id, name: o.me.name, emoji, t: now, self: true });
+      return true;
+    }
+
+    onReactMsg(m: ReactMsg) {
+      if (destroyed || !m || typeof m.from !== "string" || m.from === o.me.id) return;
+      if (!isReactEmoji(typeof m.emoji === "string" ? m.emoji : "")) return;
+      const id = typeof m.id === "string" ? m.id.slice(0, 80) : "";
+      if (!id || this.seenChat.has(id)) return;
+      const r = this.remotes.get(m.from);
+      if (!r) return;
+      if (Math.hypot(r.x - this.self.sprite.x, r.y - this.self.sprite.y) > CHAT_RECEIVE_RADIUS_PX * 2) return;
+      this.seenChat.add(id);
+      const t = typeof m.t === "number" && Number.isFinite(m.t) ? m.t : Date.now();
+      this.showReact(r, m.emoji);
+      o.onReact({ id, name: r.name, emoji: m.emoji, t, self: false });
+    }
+
+    showReact(a: Avatar, emoji: string) {
+      a.react?.root.destroy();
+      const text = this.add.text(0, 0, emoji, {
+        fontFamily: FONT, fontSize: `${Math.round(LABEL_TEX * 1.6)}px`,
+      }).setOrigin(0.5).setDepth(1_000_010);
+      text.texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+      a.react = { root: text, until: Date.now() + REACT_BUBBLE_MS };
+      this.placeReact(a);
+    }
+
+    placeReact(a: Avatar) {
+      const r = a.react;
+      if (!r) return;
+      const floor = a.floorY ?? a.sprite.y;
+      const labelHalf = (LABEL_CSS * 1.45) / 2 / zoomCss;
+      r.root.setScale(14 / (LABEL_TEX * zoomCss));
+      r.root.setPosition(a.sprite.x, floor - 22 - labelHalf);
+    }
+
     bubbleScale() { return (14 / LABEL_CSS) * this.labelScale(); }
 
     showBubble(a: Avatar, text: string, name: string, t: number) {
@@ -405,9 +558,10 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     placeBubble(a: Avatar) {
       const b = a.bubble;
       if (!b) return;
+      const floor = a.floorY ?? a.sprite.y;
       const labelHalf = (LABEL_CSS * 1.45) / 2 / zoomCss;
       b.root.setScale(this.bubbleScale());
-      b.root.setPosition(a.sprite.x, a.sprite.y - 13 - labelHalf - 3 / zoomCss);
+      b.root.setPosition(a.sprite.x, floor - 13 - labelHalf - 3 / zoomCss);
     }
 
     tickBubbles() {
@@ -415,12 +569,35 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       const now = Date.now();
       for (const a of avatars) {
         const b = a.bubble;
-        if (!b) continue;
-        const left = b.until - now;
-        if (left <= 0) { b.root.destroy(); a.bubble = undefined; continue; }
-        b.root.setAlpha(left < 500 ? Math.max(0, left / 500) : 1);
-        this.placeBubble(a);
+        if (b) {
+          const left = b.until - now;
+          if (left <= 0) { b.root.destroy(); a.bubble = undefined; }
+          else {
+            b.root.setAlpha(left < 500 ? Math.max(0, left / 500) : 1);
+            this.placeBubble(a);
+          }
+        }
+        const r = a.react;
+        if (r) {
+          const left = r.until - now;
+          if (left <= 0) { r.root.destroy(); a.react = undefined; }
+          else {
+            r.root.setAlpha(left < 400 ? Math.max(0, left / 400) : 1);
+            this.placeReact(a);
+          }
+        }
       }
+    }
+
+    jumpLift(a: Avatar): number {
+      if (!a.jumpUntil) return 0;
+      const left = a.jumpUntil - Date.now();
+      if (left <= 0) {
+        a.jumpUntil = undefined;
+        return 0;
+      }
+      const p = 1 - left / JUMP_MS;
+      return Math.sin(Math.min(1, Math.max(0, p)) * Math.PI) * JUMP_PX;
     }
 
     emitPeople() {
@@ -428,10 +605,13 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     }
 
     place(a: Avatar) {
+      const floor = a.floorY ?? a.sprite.y;
+      const lift = this.jumpLift(a);
+      a.sprite.setY(floor - lift);
       const { x, y } = a.sprite;
-      a.sprite.setDepth(10 + y);
-      a.shadow.setPosition(x, y + 7).setDepth(9 + y);
-      a.label.setPosition(x, y - 13);
+      a.sprite.setDepth(10 + floor);
+      a.shadow.setPosition(x, floor + 7).setDepth(9 + floor);
+      a.label.setPosition(x, floor - 13);
     }
 
     animate(a: Avatar, moving: boolean) {
@@ -442,8 +622,12 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     update(time: number, delta: number) {
       if (o.demo) return this.updateDemo(delta);
       const dt = Math.min(0.05, delta / 1000);
-      const typingNow = typing || domTyping();
+      const typingNow = typing || locked || domTyping();
       const k = this.keys;
+      const spaceDown = k.space.isDown;
+      if (spaceDown && !this.spaceWasDown && !typingNow) this.jump();
+      this.spaceWasDown = spaceDown;
+
       let vx = 0, vy = 0;
       if (!typingNow) {
         vx = (k.left.isDown || k.a.isDown ? -1 : 0) + (k.right.isDown || k.d.isDown ? 1 : 0);
@@ -454,13 +638,16 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       if (len > 1) { vx /= len; vy /= len; }
       const moving = len > 0;
       const me = this.self;
+      // Keep the arcade body on the floor while a jump is only a draw offset.
+      if (me.floorY != null) me.sprite.setY(me.floorY);
       me.sprite.setVelocity(vx * SPEED, vy * SPEED);
       if (moving) me.facing = facingOf(vx, vy);
       this.animate(me, moving);
+      me.floorY = me.sprite.y;
       this.place(me);
 
       // Network: throttled while moving; start/stop and turns go out immediately; heartbeat when idle.
-      const x = me.sprite.x, y = me.sprite.y;
+      const x = me.sprite.x, y = me.floorY;
       const changed = Math.abs(x - this.lastX) > 0.3 || Math.abs(y - this.lastY) > 0.3;
       const stateChanged = moving !== this.lastM || me.facing !== this.lastF;
       if (this.forceSend || stateChanged || (changed && time - this.lastSent >= SEND_EVERY) || time - this.lastSent >= HEARTBEAT) {
@@ -472,20 +659,36 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       const a = 1 - Math.exp(-dt * 12);
       for (const [id, r] of this.remotes) {
         if (time - r.seen > STALE_AFTER) { this.removeRemote(id); continue; }
-        const dx = r.x - r.sprite.x, dy = r.y - r.sprite.y, d = Math.hypot(dx, dy);
-        if (d > 160) r.sprite.setPosition(r.x, r.y);
-        else r.sprite.setPosition(r.sprite.x + dx * a, r.sprite.y + dy * a);
+        const fromY = r.floorY ?? r.sprite.y;
+        r.sprite.setY(fromY);
+        const dx = r.x - r.sprite.x, dy = r.y - fromY, d = Math.hypot(dx, dy);
+        if (d > 160) { r.sprite.setPosition(r.x, r.y); r.floorY = r.y; }
+        else {
+          r.sprite.setPosition(r.sprite.x + dx * a, fromY + dy * a);
+          r.floorY = r.sprite.y;
+        }
         const walking = r.m || d > 1.5;
         if (!r.m && d > 1.5) r.facing = facingOf(dx, dy);
         this.animate(r, walking);
         this.place(r);
       }
       this.publishNearby();
+      this.publishZones();
       this.tickBubbles();
     }
   }
 
-  if (destroyed) return { destroy() {}, setTyping() {}, sendChat: () => ({ ok: false, reason: "offline" }) };
+  if (destroyed) {
+    return {
+      destroy() {},
+      setTyping() {},
+      setLocked() {},
+      sendChat: () => ({ ok: false, reason: "offline" }),
+      jump: () => false,
+      sendReact: () => false,
+      sendCinema: () => false,
+    };
+  }
   const w = o.parent.clientWidth, h = o.parent.clientHeight, ratio = dpr();
   const game = new Phaser.Game({
     type: Phaser.AUTO,
@@ -500,7 +703,15 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     physics: { default: "arcade", arcade: { debug: false } },
     scale: { mode: Phaser.Scale.NONE, zoom: 1 / ratio },
     scene: Office,
+    fps: { target: 60, forceSet: true },
   });
+
+  const setFps = (typingMode: boolean) => {
+    try {
+      // Lower tick rate while typing so IME input stays smooth on phones.
+      game.loop.targetFps = typingMode ? 20 : 60;
+    } catch { /* older Phaser builds */ }
+  };
 
   const fit = () => {
     const r = dpr(), cw = o.parent.clientWidth, ch = o.parent.clientHeight;
@@ -516,6 +727,8 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
   ro.observe(o.parent);
   game.events.once(Phaser.Core.Events.READY, fit);
 
+  const sceneOf = () => game.scene.getScene("office") as Office | null;
+
   return {
     destroy() {
       destroyed = true;
@@ -524,11 +737,32 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       delete (window as unknown as { __vv?: unknown }).__vv;
       game.destroy(true);
     },
-    setTyping(v: boolean) { typing = v; },
+    setTyping(v: boolean) {
+      typing = v;
+      setFps(v || locked);
+    },
+    setLocked(v: boolean) {
+      locked = v;
+      setFps(typing || v);
+    },
     sendChat(raw: string) {
-      const scene = game.scene.getScene("office") as Office | null;
+      const scene = sceneOf();
       if (!scene?.sys.isActive() || !scene.mapW || o.demo) return { ok: false, reason: "offline" };
       return scene.sendChat(raw);
+    },
+    jump() {
+      const scene = sceneOf();
+      if (!scene?.sys.isActive() || !scene.mapW || o.demo) return false;
+      return scene.jump();
+    },
+    sendReact(emoji: string) {
+      const scene = sceneOf();
+      if (!scene?.sys.isActive() || !scene.mapW || o.demo) return false;
+      return scene.sendReact(emoji);
+    },
+    sendCinema(state: CinemaMsg) {
+      if (o.demo) return false;
+      return o.transport.sendCinema(state);
     },
   };
 }

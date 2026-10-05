@@ -84,15 +84,29 @@ put(19, 18, [[54, 54]], { block: false }); put(19, 20, [[55, 55]], { block: fals
 put(18, 19, [[56]], { block: false }); put(21, 19, [[57]], { block: false });
 for (const [x, y] of [[1, 14], [38, 14], [1, 26], [38, 26], [15, 14], [24, 14]]) put(x, y, [[16 + ((x + y) % 2)]]);
 
-// ---- Objects: spawn point + floor labels (pixels)
+// ---- Cinema set dressing: big screen on the meeting-room north wall
+put(27, 3, [[347, 348, 347, 348], [374, 375, 374, 375]], { block: true, l: furniture });
+
+// ---- Arcade corner (east hall): cabinet + rug marker
+put(30, 18, [[922, 923, 924], [979, 980, 981], [1036, 1037, 1038]], { block: false, l: rugs, gid: R });
+put(31, 19, [[239, 240], [266, 267]]);
+
+// ---- Objects: spawn, floor labels, interactive zones (pixels)
 let oid = 1;
 const obj = (name, type, x, y, props = []) => ({ id: oid++, name, type, x, y, width: 0, height: 0, point: true, rotation: 0, visible: true, properties: props });
+const zone = (name, x, y, w, h) => ({ id: oid++, name, type: "zone", x, y, width: w, height: h, rotation: 0, visible: true, properties: [] });
 const objects = [
   obj("spawn", "spawn", 19.5 * 16, 24.5 * 16),
   obj("Lounge", "label", 4 * 16, 9.6 * 16),
-  obj("Meeting room", "label", 29.5 * 16, 9.6 * 16),
+  obj("Cinema", "label", 29.5 * 16, 9.6 * 16),
   obj("Café", "label", 8 * 16, 25.6 * 16),
+  obj("Arcade", "label", 32 * 16, 16.2 * 16),
   obj("HOWL STUDIO", "label", 20 * 16, 15.4 * 16),
+  // Meeting room = shared cinema (watch YouTube together)
+  zone("cinema", 21 * 16, 3 * 16, 18 * 16, 8 * 16),
+  // East hall arcade + board just outside the play rug
+  zone("arcade", 28 * 16, 16 * 16, 11 * 16, 10 * 16),
+  zone("leaderboard", 27 * 16, 14 * 16, 6 * 16, 3 * 16),
 ];
 void DOORS;
 
