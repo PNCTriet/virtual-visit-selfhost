@@ -67,7 +67,11 @@ export function Leaderboard({
 
   if (variant === "compact") {
     return (
-      <aside aria-label="Leaderboard" className="vv-glass absolute top-[72px] left-3 z-20 w-[min(220px,calc(100vw-24px))] rounded-[22px] p-3.5">
+      <aside
+        aria-label="Leaderboard"
+        className="vv-glass absolute left-3 z-20 w-[min(220px,calc(100vw-24px))] rounded-[22px] p-3.5"
+        style={{ top: "calc(max(12px, env(safe-area-inset-top)) + 60px)" }}
+      >
         {body}
       </aside>
     );

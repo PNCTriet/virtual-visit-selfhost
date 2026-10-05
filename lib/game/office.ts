@@ -235,7 +235,24 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       sprite.body!.setSize(10, 6).setOffset(3, 10);
       sprite.setCollideWorldBounds(true);
       this.physics.add.collider(sprite, collision);
-      this.self = { sprite, shadow: this.add.image(sx, sy + 7, "shadow"), label: this.makeLabel(o.me.name, true), character, facing: 0 };
+      this.self = { sprite, shadow: this.add.image(sx, sy + 7, "shadow"), label: this.makeLabel(o.me.name, true), character, facing: 0, floorY: sy };
+      // Jump is only a draw offset. Arcade physics copies sprite → body, then adds
+      // velocity as a delta onto sprite.y in postUpdate. Writing sprite.y inside
+      // update() (to pin the body to floorY) therefore discards every vertical step
+      // and leaves only left/right movement. Restore before the copy; offset after.
+      this.events.on(Phaser.Scenes.Events.PRE_UPDATE, this.beforePhysics, this);
+      this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.afterPhysics, this);
+      const syncKeyCapture = () => {
+        if (this.input.keyboard) this.input.keyboard.manager.preventDefault = !domTyping();
+      };
+      document.addEventListener("focusin", syncKeyCapture);
+      // activeElement has not moved yet when focusout fires.
+      const syncKeyCaptureSoon = () => window.setTimeout(syncKeyCapture, 0);
+      document.addEventListener("focusout", syncKeyCaptureSoon);
+      this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+        document.removeEventListener("focusin", syncKeyCapture);
+        document.removeEventListener("focusout", syncKeyCaptureSoon);
+      });
 
       const cam = this.cameras.main;
       cam.setBounds(0, 0, this.mapW, this.mapH);
@@ -310,7 +327,8 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     }
 
     snap(a: Avatar, name: string) {
-      return { name, x: Math.round(a.sprite.x), y: Math.round(a.sprite.y), f: a.facing, anim: a.sprite.anims.isPlaying ? a.sprite.anims.currentAnim?.key : "idle", frame: Number(a.sprite.frame.name), bubble: a.bubble?.text ?? null };
+      const y = a.floorY ?? a.sprite.y;
+      return { name, x: Math.round(a.sprite.x), y: Math.round(y), f: a.facing, anim: a.sprite.anims.isPlaying ? a.sprite.anims.currentAnim?.key : "idle", frame: Number(a.sprite.frame.name), bubble: a.bubble?.text ?? null };
     }
 
     makeLabel(name: string, self: boolean) {
@@ -385,7 +403,8 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
     }
 
     currentZones(): ZoneFlags {
-      const { x, y } = this.self.sprite;
+      const x = this.self.sprite.x;
+      const y = this.self.floorY ?? this.self.sprite.y;
       const hit = (name: string) => this.zones.some((z) => z.name === name && x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h);
       return { cinema: hit("cinema"), arcade: hit("arcade"), leaderboard: hit("leaderboard") };
     }
@@ -619,6 +638,23 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       else { a.sprite.anims.stop(); a.sprite.setFrame(idleFrame(a.character, a.facing)); }
     }
 
+    /** Put the sprite back on the floor before arcade copies it into the body. */
+    beforePhysics() {
+      if (o.demo || !this.self || this.self.floorY == null) return;
+      this.self.sprite.y = this.self.floorY;
+    }
+
+    /** Record the floor after physics, then draw the jump hop without feeding it back into the body. */
+    afterPhysics() {
+      if (o.demo || !this.self) return;
+      const me = this.self;
+      me.floorY = me.sprite.y;
+      this.publishNearby();
+      this.publishZones();
+      this.place(me);
+      this.tickBubbles();
+    }
+
     update(time: number, delta: number) {
       if (o.demo) return this.updateDemo(delta);
       const dt = Math.min(0.05, delta / 1000);
@@ -638,16 +674,14 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
       if (len > 1) { vx /= len; vy /= len; }
       const moving = len > 0;
       const me = this.self;
-      // Keep the arcade body on the floor while a jump is only a draw offset.
-      if (me.floorY != null) me.sprite.setY(me.floorY);
+      // Do not write sprite.y here. postUpdate adds this frame's velocity as a delta;
+      // a setY() in between the physics step and that delta cancels vertical movement.
       me.sprite.setVelocity(vx * SPEED, vy * SPEED);
       if (moving) me.facing = facingOf(vx, vy);
       this.animate(me, moving);
-      me.floorY = me.sprite.y;
-      this.place(me);
 
       // Network: throttled while moving; start/stop and turns go out immediately; heartbeat when idle.
-      const x = me.sprite.x, y = me.floorY;
+      const x = me.sprite.x, y = me.floorY ?? me.sprite.y;
       const changed = Math.abs(x - this.lastX) > 0.3 || Math.abs(y - this.lastY) > 0.3;
       const stateChanged = moving !== this.lastM || me.facing !== this.lastF;
       if (this.forceSend || stateChanged || (changed && time - this.lastSent >= SEND_EVERY) || time - this.lastSent >= HEARTBEAT) {
@@ -672,9 +706,6 @@ export async function startOffice(o: Options): Promise<OfficeHandle> {
         this.animate(r, walking);
         this.place(r);
       }
-      this.publishNearby();
-      this.publishZones();
-      this.tickBubbles();
     }
   }
 

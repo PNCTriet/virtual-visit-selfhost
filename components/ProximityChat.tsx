@@ -132,8 +132,11 @@ export function ProximityChat({
           type="button"
           data-testid="chat-toggle"
           onClick={onOpen}
-          className="vv-glass vv-focus absolute right-3 z-30 inline-flex h-11 max-w-[calc(100vw-168px)] items-center gap-2 rounded-full px-3.5 text-[14px] font-medium"
-          style={{ bottom: "max(18px, env(safe-area-inset-bottom))" }}
+          className="vv-glass vv-focus absolute z-30 inline-flex h-11 max-w-[min(280px,calc(100vw-250px))] items-center gap-2 rounded-full px-3.5 text-[14px] font-medium"
+          style={{
+            right: "calc(max(16px, env(safe-area-inset-right)) + 68px)",
+            bottom: "max(18px, env(safe-area-inset-bottom))",
+          }}
         >
           <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[#30d158]" />
           <span className="truncate">{hint}</span>
